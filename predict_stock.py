@@ -85,6 +85,11 @@ ap.add_argument("--use_attn", action="store_true")
 ap.add_argument("--out", help="輸出檔名 (default 自動)")
 args = ap.parse_args()
 
+# Always save under result/{stock-symbol}/
+symbol = Path(args.csv).stem.split("_")[0].upper()
+result_dir = Path("result") / symbol
+result_dir.mkdir(parents=True, exist_ok=True)
+
 # ╭────────── 讀檔 + granularity ───────────╮
 df0 = pd.read_csv(args.csv, parse_dates=["date"])
 df0["date"] = pd.to_datetime(df0["date"], utc=True).dt.tz_localize(None)
@@ -182,7 +187,8 @@ print(out_df.tail(5).to_string(index=False, max_colwidth=60))
 acc = correct.mean()*100
 print(f"\nAccuracy = {acc:.2f}%")
 
-out_path = args.out or f"{Path(args.csv).stem}_pred.csv"
+out_filename = (Path(args.out).name if args.out else f"{Path(args.csv).stem}_pred.csv")
+out_path = result_dir / out_filename
 out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
 with open(out_path, "a", encoding="utf-8-sig") as f:
     f.write(f"\naccuracy,,,{acc:.2f}%\n")
@@ -190,6 +196,6 @@ print(f"[OK] saved to {out_path}")
 
 bad_rows = out_df[out_df["high_conf_wrong"]]
 if not bad_rows.empty:
-    bad_path = f"{Path(args.csv).stem}_bad.csv"
+    bad_path = result_dir / f"{Path(args.csv).stem}_bad.csv"
     bad_rows.to_csv(bad_path, index=False, encoding="utf-8-sig")
     print(f"[WARN] High-conf wrong: {len(bad_rows)} rows, saved to {bad_path}")

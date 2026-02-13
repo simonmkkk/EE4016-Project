@@ -6,7 +6,20 @@ import yfinance as yf
 
 
 load_dotenv()
-SAVE_DIR = os.getenv("SAVE_DIR", str(Path(__file__).resolve().parent / "record"))
+
+_PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def ensure_project_folders() -> None:
+    """Create model/, record/, and result/ under project root if they do not exist."""
+    for name in ("model", "record", "result"):
+        folder = _PROJECT_ROOT / name
+        folder.mkdir(parents=True, exist_ok=True)
+
+
+ensure_project_folders()
+
+SAVE_DIR = os.getenv("SAVE_DIR", str(_PROJECT_ROOT / "record"))
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 # ---------- Parse arguments ----------

@@ -70,6 +70,7 @@ class LSTMDir(nn.Module):
 ap = argparse.ArgumentParser()
 ap.add_argument("--csvs", nargs="*", help="多個 csv 檔路徑")
 ap.add_argument("--csv_dir", help="含一批 csv 的資料夾")
+ap.add_argument("--ticker", help="只用此代號的 csv (與 --csv_dir 合用時篩選，如 AAPL)；也決定 model/{ticker}/ 資料夾")
 ap.add_argument("--save_model", required=True)
 ap.add_argument("--window", type=int, default=30)
 ap.add_argument("--epochs", type=int, default=40)
@@ -117,9 +118,22 @@ def read_and_fe(path: str):                           # ★ NEW
 # ╭─────────────── 主流程 ──────────────────╮
 csv_list = args.csvs or []
 if args.csv_dir:
-    csv_list += glob.glob(os.path.join(args.csv_dir, "*.csv"))
+    all_csv = glob.glob(os.path.join(args.csv_dir, "*.csv"))
+    if args.ticker:
+        ticker_upper = args.ticker.strip().upper()
+        csv_list += [p for p in all_csv if Path(p).stem.upper().startswith(ticker_upper + "_")]
+        if not csv_list:
+            sys.exit(f"[ERROR] No CSV in {args.csv_dir!r} for ticker {ticker_upper} (e.g. {ticker_upper}_5y_1d.csv)")
+    else:
+        csv_list += all_csv
 if not csv_list:
     sys.exit("[ERROR] Must specify --csvs or --csv_dir")
+
+# Always save under model/{stock-symbol}/ (symbol from --ticker or first CSV)
+symbol = (args.ticker.strip().upper() if args.ticker else Path(csv_list[0]).stem.split("_")[0].upper())
+model_dir = Path("model") / symbol
+model_dir.mkdir(parents=True, exist_ok=True)
+save_path = model_dir / (Path(args.save_model).name or "dir_model.pt")
 
 frames = [read_and_fe(p) for p in csv_list]           # ★ NEW
 data   = pd.concat(frames).reset_index(drop=True)
@@ -155,9 +169,9 @@ for ep in range(args.epochs):
     print(f"[{ep+1:03d}] loss={avg:.4f}")
     if avg < best:
         best, wait = avg, 0
-        torch.save(model.state_dict(), args.save_model)
+        torch.save(model.state_dict(), save_path)
     else:
         wait += 1
         if wait >= args.patience:
             print("[early stop]"); break
-print(f"[OK] saved to {args.save_model}")
+print(f"[OK] saved to {save_path}")

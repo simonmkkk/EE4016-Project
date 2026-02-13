@@ -6,7 +6,10 @@ __pycache__/
 *.pyc
 
 .env
-record/
 
 *.csv
 *.pt
+
+record/
+model/
+result/
