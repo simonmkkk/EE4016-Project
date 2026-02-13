@@ -71,10 +71,10 @@ def get_args():
             print(f"Unsupported interval '{a.interval}'. Available: {opts}\n")
 
     if a.years is None:
-        hint = "default 5 years"
+        hint = "default 5y"
         if a.interval in INTERVAL_LIMITS:
             md = INTERVAL_LIMITS[a.interval]
-            hint = f"default 5 years, max {_max_lookback_label(md)}"
+            hint = f"default 5y, max {_max_lookback_label(md)}"
         raw = input(f"Enter lookback: endwith [d/mo/y] ({hint}): ").strip()
         if not raw:
             a.years = 5

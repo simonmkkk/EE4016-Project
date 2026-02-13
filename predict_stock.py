@@ -177,19 +177,19 @@ out_df["improve_tip"] = tips
 
 
 # ╭────────── Print & Save ──────────────────╮
-print("\n🔮 Last 5 predictions (with explanation):")
+print("\nLast 5 predictions (with explanation):")
 print(out_df.tail(5).to_string(index=False, max_colwidth=60))
 acc = correct.mean()*100
-print(f"\n📊 Accuracy = {acc:.2f}%")
+print(f"\nAccuracy = {acc:.2f}%")
 
 out_path = args.out or f"{Path(args.csv).stem}_pred.csv"
 out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
 with open(out_path, "a", encoding="utf-8-sig") as f:
     f.write(f"\naccuracy,,,{acc:.2f}%\n")
-print(f"✅ saved to {out_path}")
+print(f"[OK] saved to {out_path}")
 
 bad_rows = out_df[out_df["high_conf_wrong"]]
 if not bad_rows.empty:
     bad_path = f"{Path(args.csv).stem}_bad.csv"
     bad_rows.to_csv(bad_path, index=False, encoding="utf-8-sig")
-    print(f"⚠️  高信心卻錯誤的有 {len(bad_rows)} 筆，已另存 {bad_path}")
+    print(f"[WARN] High-conf wrong: {len(bad_rows)} rows, saved to {bad_path}")

@@ -119,7 +119,7 @@ csv_list = args.csvs or []
 if args.csv_dir:
     csv_list += glob.glob(os.path.join(args.csv_dir, "*.csv"))
 if not csv_list:
-    sys.exit("❌  必須指定 --csvs 或 --csv_dir")
+    sys.exit("[ERROR] Must specify --csvs or --csv_dir")
 
 frames = [read_and_fe(p) for p in csv_list]           # ★ NEW
 data   = pd.concat(frames).reset_index(drop=True)
@@ -159,5 +159,5 @@ for ep in range(args.epochs):
     else:
         wait += 1
         if wait >= args.patience:
-            print("⏹️ early stop"); break
-print(f"✅ saved to {args.save_model}")
+            print("[early stop]"); break
+print(f"[OK] saved to {args.save_model}")
