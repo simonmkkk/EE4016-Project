@@ -1,5 +1,8 @@
 import os, argparse, datetime, sys
+from pathlib import Path
+
 import pandas as pd
+from dotenv import load_dotenv
 
 try:
     import yfinance as yf
@@ -7,7 +10,8 @@ except ImportError:
     print("未安裝 yfinance，請先執行: pip install yfinance")
     sys.exit(1)
 
-SAVE_DIR = "C:/Users/ryanb/Desktop/work/python"
+load_dotenv()
+SAVE_DIR = os.getenv("SAVE_DIR", str(Path(__file__).resolve().parent / "record"))
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 # ---------- 解析參數 ----------
