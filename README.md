@@ -14,7 +14,7 @@
 
 流程圖展示了本專案的端到端管線：`experiment_protocol.json` 由 `run_protocol.py` 協調後，驅動資料下載、模型訓練與回測比較。訓練會產生 `model/<SYMBOL>/` 下的模型與可重現 artifacts（`pt/scaler/meta`），推論可獨立執行並輸出解釋欄位，而回測會在相同評估區段下比較 LSTM 與基準策略，最終輸出到 `RESULTS_DIR`（預設 `backtest_results/`，於 `.env` 設定；含明細、summary 與 comparison 總表）。
 
-**互動式入口（新）**：在專案根目錄執行 `uv run main.py` 可開啟選單（`app/` 內 Data / Train / Backtest / Predict / Pipeline / Results）。選單會從 `historical_data/*.csv` 挑檔；請將 `.env` 的 `SAVE_DIR` 指到同一資料夾（與 `get_stock_data` 預設一致）。細節見 `MAIN_TO_FULL_PROJECT_FLOW.md`。
+**互動式入口**：在專案根目錄執行 `uv run main.py` 可開啟選單。完整用法（主選單對照表、前置條件、離開方式）見下文 **使用 `main.py`** 一節；下載資料的終端畫面與程式呼叫鏈見 **Main 選單：下載資料**。
 
 ### Project structure
 
@@ -27,6 +27,7 @@ EE4016-Project
 +-- backtest_stock.py
 +-- predict_stock.py
 +-- run_protocol.py
++-- validate_paths.py
 |
 +-- app
 |   |
@@ -52,13 +53,162 @@ EE4016-Project
 |       +-- predict_menu.py
 |       `-- results_menu.py
 |
-+-- historical_data/
-+-- model/
-+-- backtest_results/
-|
-+-- MAIN_TO_DATA_DOWNLOAD_FLOW.md
-+-- MAIN_TO_DATA_DOWNLOAD_CODE_PATH.md
-`-- MAIN_TO_FULL_PROJECT_FLOW.md
++-- historical_data/     (或 .env 的 SAVE_DIR)
++-- model/               (或 .env 的 MODEL_DIR)
++-- backtest_results/    (或 .env 的 RESULTS_DIR)
+```
+
+### 使用 `main.py`
+
+`main.py` 是互動式入口腳本：**不解析命令列參數**，啟動後會進入主選單迴圈（`app.menu.interactive_menu`），在終端清屏、列印選項並等待你輸入數字。
+
+**前置**：在專案根目錄完成 `uv sync`，並依本文件 **1) 環境需求**、**2) 先設定 `.env`** 完成設定，使 `SAVE_DIR`／`MODEL_DIR`／`RESULTS_DIR` 與實際資料夾一致。選單會從 `SAVE_DIR` 掃描 `*.csv` 供訓練／回測／推論挑檔。
+
+**啟動**（工作目錄須為專案根目錄）：
+
+```powershell
+uv run main.py
+```
+
+
+**主選單選項**
+
+| 輸入 | 區塊 | 行為（對應腳本） |
+|------|------|------------------|
+| `1` | Data | 依 ticker／interval／歷史區間下載（`get_stock_data.py`） |
+| `2` | Train | 從歷史 CSV 挑檔並推斷 ticker 後訓練（`train_stock.py`） |
+| `3` | Backtest | 挑 CSV 與模型回測（`backtest_stock.py`） |
+| `4` | Predict | 挑 CSV 與模型推論（含解釋欄位）（`predict_stock.py`） |
+| `5` | Pipeline | 執行 protocol runner（`run_protocol.py`） |
+| `6` | Results | 讀取並顯示 `RESULTS_DIR` 下的 `comparison_summary.csv` 摘要 |
+| `0` | — | 結束程式 |
+
+輸入不在上表中的內容會提示重新選擇。在要求輸入時按 **Ctrl+C**（或送達 EOF）會顯示離開訊息並結束。進入子選單後另有獨立選項；多數子選單以 **`0` 返回上一層**。
+
+下載資料的逐步終端畫面見下方 **「Main 選單：下載資料（終端畫面流程）」**。
+
+### Main 選單：下載資料（終端畫面流程）
+
+以下為從 `main.py` 進入 Data menu、手動下載一檔的畫面流程（輸出檔名與路徑以 `SAVE_DIR` 為準，圖中範例為預設資料夾名）。
+
+```text
+┌──────────────────────────────────────────────────────────────────────┐
+│ Terminal                                                            │
+│ > uv run main.py                                                    │
+└──────────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ ====================== MAIN MENU ======================             │
+│ [Data]                                                               │
+│   1. Data menu                                                       │
+│ ...                                                                  │
+│ Enter your choice: 1                                                 │
+└──────────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ ==================== Stock ML - Data Menu ====================      │
+│ [Download]                                                           │
+│   1. Download by ticker/interval/historical range (get_stock_data.py)│
+│                                                                      │
+│ Enter your choice [1]:                                               │
+└──────────────────────────────────────────────────────────────────────┘
+                               │
+                               │ (manual path: choose 1)
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ tickers (e.g. AAPL,MSFT) [default=AAPL]:                            │
+│ Selected tickers: AAPL                                               │
+│                                                                      │
+│ interval (e.g. 1d, 1h, 5m) [default=1d]:                            │
+│ Selected interval: 1d                                                │
+│                                                                      │
+│ historical range (e.g. 30d, 6mo, 2y), max 10y [default=10y]:        │
+│ Selected historical range: 10y                                       │
+└──────────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ ---------------------- Download Summary ----------------------       │
+│ Tickers      : AAPL                                                  │
+│ Interval     : 1d                                                    │
+│ Historical   : 10y                                                   │
+│ Interval Max : 10y                                                   │
+│ ------------------------------------------------------------------   │
+│ Ready to download? [Y/n]:                                            │
+└──────────────────────────────────────────────────────────────────────┘
+                      │ Yes                              │ No
+                      ▼                                  ▼
+┌──────────────────────────────────────┐   ┌───────────────────────────┐
+│ Downloading AAPL, last 10y, ...      │   │ Cancelled.                │
+│ Saved <SAVE_DIR>/AAPL_10y_1d.csv     │   │ Press Enter to continue...│
+│ Press Enter to continue...            │   └───────────────────────────┘
+└──────────────────────────────────────┘
+```
+
+### Main 選單：下載資料（程式呼叫鏈）
+
+```text
+                           ┌──────────────────────┐
+                           │       main.py        │
+                           │  main()              │
+                           └──────────┬───────────┘
+                                      │
+                                      ▼
+                    ┌──────────────────────────────────┐
+                    │ app/menu.py                      │
+                    │ interactive_menu()               │
+                    │ MENU_ACTIONS["1"] -> run_data... │
+                    └────────────────┬─────────────────┘
+                                     │
+                                     ▼
+                   ┌──────────────────────────────────┐
+                   │ app/menus/data_menu.py           │
+                   │ run_data_menu()                  │
+                   └──────────────┬───────────────────┘
+                                  │
+                                  ▼
+                  ┌──────────────────────────────────┐
+                  │ manual parameter path            │
+                  │ tickers / interval / range       │
+                  └──────────────┬───────────────────┘
+                                 │
+                                 ▼
+       ┌────────────────────────────────────────────────────────────┐
+       │ app/actions/stock_actions.py                              │
+       │ run_script(...)                                            │
+       └──────────────┬─────────────────────────────────────────────┘
+                       │
+                       ▼
+        ┌────────────────────────────────────────────────────────────┐
+        │ subprocess.run([sys.executable, "get_stock_data.py", ...]) │
+        └──────────────┬─────────────────────────────────────────────┘
+                       │
+                       ▼
+        ┌────────────────────────────────────────────────────────────┐
+        │ get_stock_data.py                                          │
+        │ parse args -> validate -> yfinance -> CSV -> SAVE_DIR      │
+        └──────────────┬─────────────────────────────────────────────┘
+                       │
+                       ▼
+                <SAVE_DIR>/<TICKER>_<RANGE>_<INTERVAL>.csv
+```
+
+**下載流程相關模組依賴**
+
+```text
+app/menus/data_menu.py
+  ├── app/ui/cli.py
+  │     ├── ask(), ask_yes_no(), clear_screen(), pause()
+  ├── app/constants.py  (INTERVAL_LIMITS)
+  ├── app/services/discovery.py
+  │     ├── duration_to_years(), max_lookback_label()
+  └── app/actions/stock_actions.py  (run_script)
+
+app/services/discovery.py
+  ├── app/state.py  (load_state, save_state)
+  └── app/paths.py  (PROJECT_ROOT, SAVE_DIR, RESULTS_DIR, MODEL_DIR, STATE_PATH)
 ```
 
 ---
@@ -235,6 +385,8 @@ uv run run_protocol.py --protocol experiment_protocol.json --window_idxs 0 --epo
 ---
 
 ## (1-minute) Quick Start 
+
+下列指令為「純 CLI」最小流程。若要以互動選單完成下載／訓練／回測等步驟，可在 `uv sync` 與 `.env` 就緒後改執行 `uv run main.py`，說明見 **使用 `main.py`** 一節。
 
 在專案根目錄直接依序執行：
 
