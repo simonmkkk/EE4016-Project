@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ..paths import PROJECT_ROOT
+from ..paths import PROJECT_ROOT, SAVE_DIR, MODEL_DIR
 from ..state import load_state, save_state
 from ..ui import choose_from_list
 
@@ -13,12 +13,12 @@ def rel(p: Path) -> str:
 
 
 def list_historical_csvs() -> list[Path]:
-    rec = PROJECT_ROOT / "historical_data"
+    rec = SAVE_DIR
     return sorted(rec.glob("*.csv"), key=lambda p: p.name.lower()) if rec.exists() else []
 
 
 def list_model_pts() -> list[Path]:
-    mdl = PROJECT_ROOT / "model"
+    mdl = MODEL_DIR
     return sorted(mdl.glob("*/*.pt"), key=lambda p: str(p).lower()) if mdl.exists() else []
 
 
@@ -65,7 +65,7 @@ def pick_csv(*, state_key: str = "last_csv") -> Path | None:
     items = [rel(p) for p in csvs]
     last = state.get(state_key)
     default_idx = (items.index(last) + 1) if (last in items) else None
-    chosen = choose_from_list("  Select CSV (historical_data/*.csv)", items, default_index=default_idx)
+    chosen = choose_from_list(f"  Select CSV ({rel(SAVE_DIR)}/*.csv)", items, default_index=default_idx)
     if not chosen:
         return None
     state[state_key] = chosen
@@ -82,7 +82,7 @@ def pick_model(*, prefer_ticker: str | None = None, state_key: str = "last_model
     items = [rel(p) for p in pts]
     last = state.get(state_key)
     default_idx = (items.index(last) + 1) if (last in items) else None
-    chosen = choose_from_list("  Select model (model/*/*.pt)", items, default_index=default_idx)
+    chosen = choose_from_list(f"  Select model ({rel(MODEL_DIR)}/*/*.pt)", items, default_index=default_idx)
     if not chosen:
         return None
     state[state_key] = chosen

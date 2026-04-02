@@ -9,6 +9,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from app.paths import SAVE_DIR, RESULTS_DIR, MODEL_DIR
+
 import pandas as pd
 
 
@@ -44,7 +49,8 @@ if len(sys.argv) == 1:
     epochs_in = input("epochs [5]: ").strip() or "5"
     window_in = input("window [30]: ").strip() or "30"
     fee_in = input("fee [0.001]: ").strip() or "0.001"
-    out_in = input("out csv path (blank=default backtest_results/comparison_summary.csv): ").strip()
+    _def_cmp = str(RESULTS_DIR / "comparison_summary.csv")
+    out_in = input(f"out csv path (blank=default {_def_cmp}): ").strip()
     tickers_in = input("ticker subset (space-separated, blank=all from protocol): ").strip()
     idxs_in = input("window_idx subset (space-separated ints, blank=all): ").strip()
 
@@ -96,7 +102,7 @@ for widx in idxs:
 
     lb = lookback_label(years)
     for tic in tickers:
-        csv_path = Path("historical_data") / f"{tic}_{lb}_{interval}.csv"
+        csv_path = SAVE_DIR / f"{tic}_{lb}_{interval}.csv"
         if not csv_path.exists():
             print(f"[WARN] skip {tic}: csv not found {csv_path}")
             continue
@@ -107,7 +113,7 @@ for widx in idxs:
                 sys.executable,
                 "train_stock.py",
                 "--csv_dir",
-                "historical_data",
+                str(SAVE_DIR),
                 "--ticker",
                 tic,
                 "--save_model",
@@ -129,7 +135,7 @@ for widx in idxs:
                 "--csv",
                 str(csv_path),
                 "--model",
-                str(Path("model") / tic / "dir_model.pt"),
+                str(MODEL_DIR / tic / "dir_model.pt"),
                 "--protocol",
                 str(protocol_path),
                 "--eval_split",
@@ -139,7 +145,7 @@ for widx in idxs:
             ]
         )
 
-        summary_path = Path("backtest_results") / tic / f"{csv_path.stem}_bt_summary.json"
+        summary_path = RESULTS_DIR / tic / f"{csv_path.stem}_bt_summary.json"
         with open(summary_path, "r", encoding="utf-8") as f:
             s = json.load(f)
         for strat, vals in s.get("strategies", {}).items():
@@ -185,7 +191,7 @@ grouped = (
     .sort_values(["window_idx", "avg_sharpe"], ascending=[True, False])
 )
 
-out_path = Path(args.out) if args.out else Path("backtest_results") / "comparison_summary.csv"
+out_path = Path(args.out) if args.out else RESULTS_DIR / "comparison_summary.csv"
 out_path.parent.mkdir(parents=True, exist_ok=True)
 grouped.to_csv(out_path, index=False, encoding="utf-8-sig")
 print(f"[OK] comparison summary saved to {out_path}")

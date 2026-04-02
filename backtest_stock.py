@@ -9,6 +9,11 @@ import pickle
 import sys
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from app.paths import RESULTS_DIR, SAVE_DIR
+
 import numpy as np
 import pandas as pd
 import torch
@@ -74,7 +79,7 @@ args = ap.parse_args()
 
 if len(sys.argv) == 1:
     print("\n=== Backtest ‧ Interactive mode ===")
-    csv_in = input("CSV path (e.g. historical_data/AAPL_2y_1h.csv): ").strip()
+    csv_in = input(f"CSV path (e.g. {SAVE_DIR.name}/AAPL_2y_1h.csv): ").strip()
     model_in = input("Model .pt path (e.g. model/AAPL/dir_model.pt): ").strip()
     fee_in = input("fee [0.001]: ").strip() or "0.001"
     split_in = input("eval_split (test/all) [test]: ").strip().lower() or "test"
@@ -252,7 +257,7 @@ out = pd.DataFrame(
 )
 
 symbol = Path(args.csv).stem.split("_")[0].upper()
-result_dir = Path("backtest_results") / symbol
+result_dir = RESULTS_DIR / symbol
 result_dir.mkdir(parents=True, exist_ok=True)
 out_name = Path(args.out).name if args.out else f"{Path(args.csv).stem}_bt.csv"
 out_path = result_dir / out_name

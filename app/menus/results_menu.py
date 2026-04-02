@@ -1,4 +1,5 @@
-from ..paths import PROJECT_ROOT
+from ..paths import RESULTS_DIR
+from ..services.discovery import rel
 from ..ui import clear_screen, pause
 
 
@@ -8,15 +9,15 @@ def _print_results_menu():
     print("=" * 70)
     print("\nPlease select an option:\n")
     print("[Summary]")
-    print("   1. Show protocol comparison summary (backtest_results/comparison_summary.csv)")
+    print(f"   1. Show protocol comparison summary ({rel(RESULTS_DIR)}/comparison_summary.csv)")
     print("\n   0. Back")
     print("=" * 70)
 
 
 def _show_comparison_summary():
-    summary_path = PROJECT_ROOT / "backtest_results" / "comparison_summary.csv"
+    summary_path = RESULTS_DIR / "comparison_summary.csv"
     if not summary_path.exists():
-        print("\n  backtest_results/comparison_summary.csv not found. Run protocol runner first.")
+        print(f"\n  {rel(summary_path)} not found. Run protocol runner first.")
         return
     try:
         import pandas as pd

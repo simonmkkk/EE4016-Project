@@ -1,23 +1,20 @@
 import os, argparse, datetime, sys, json
 from pathlib import Path
 import pandas as pd
-from dotenv import load_dotenv
 import yfinance as yf
 
-
-load_dotenv()
-
 _PROJECT_ROOT = Path(__file__).resolve().parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from app.paths import SAVE_DIR
 
 
 def ensure_project_folders() -> None:
-    """Create download folder only (historical_data by default)."""
-    # Create only the downloader target folder; do not pre-create model/result.
-    save_folder = Path(SAVE_DIR)
-    save_folder.mkdir(parents=True, exist_ok=True)
+    """Create download folder from SAVE_DIR (.env)."""
+    SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-SAVE_DIR = os.getenv("SAVE_DIR", str(_PROJECT_ROOT / "historical_data"))
 ensure_project_folders()
 
 # ---------- Parse arguments ----------
@@ -234,7 +231,7 @@ for tic in args.ticker:
 
     # ---------- Write CSV ----------
     fname = f"{tic.upper()}_{lookback_label}_{args.interval}.csv"
-    outpath = os.path.join(SAVE_DIR, fname)
+    outpath = str(SAVE_DIR / fname)
     df.to_csv(outpath, index=False)
     out_path_obj = Path(outpath).resolve()
     try:

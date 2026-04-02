@@ -10,6 +10,11 @@ train_stock.py   ── 只做訓練
 """
 import os, glob, sys, math, argparse, json, pickle, random, hashlib, subprocess
 from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from app.paths import MODEL_DIR
 import numpy as np
 import pandas as pd
 import torch
@@ -245,7 +250,7 @@ if not csv_list:
 
 # Always save under model/{stock-symbol}/ (symbol from --ticker or first CSV)
 symbol = (args.ticker.strip().upper() if args.ticker else Path(csv_list[0]).stem.split("_")[0].upper())
-model_dir = Path("model") / symbol
+model_dir = MODEL_DIR / symbol
 model_dir.mkdir(parents=True, exist_ok=True)
 save_path = model_dir / (Path(args.save_model).name or "dir_model.pt")
 

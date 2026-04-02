@@ -9,6 +9,11 @@ predict_stock.py  ── 推論 + 解釋版
 import sys, argparse, json, pickle, random
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from app.paths import RESULTS_DIR
+
 import numpy as np
 import pandas as pd
 import torch
@@ -99,9 +104,9 @@ def set_seed(seed: int):
 
 set_seed(args.seed)
 
-# Always save under backtest_results/{stock-symbol}/
+# Always save under RESULTS_DIR/{stock-symbol}/ (.env RESULTS_DIR)
 symbol = Path(args.csv).stem.split("_")[0].upper()
-result_dir = Path("backtest_results") / symbol
+result_dir = RESULTS_DIR / symbol
 result_dir.mkdir(parents=True, exist_ok=True)
 
 # ╭────────── 讀檔 + granularity ───────────╮

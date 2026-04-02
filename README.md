@@ -12,7 +12,54 @@
 
 ![Project Flow Diagram](flowchart/flowchart.png)
 
-流程圖展示了本專案的端到端管線：`experiment_protocol.json` 由 `run_protocol.py` 協調後，驅動資料下載、模型訓練與回測比較。訓練會產生 `model/<SYMBOL>/` 下的模型與可重現 artifacts（`pt/scaler/meta`），推論可獨立執行並輸出解釋欄位，而回測會在相同評估區段下比較 LSTM 與基準策略，最終輸出到 `result/`（包含明細、summary 與 comparison 總表）。
+流程圖展示了本專案的端到端管線：`experiment_protocol.json` 由 `run_protocol.py` 協調後，驅動資料下載、模型訓練與回測比較。訓練會產生 `model/<SYMBOL>/` 下的模型與可重現 artifacts（`pt/scaler/meta`），推論可獨立執行並輸出解釋欄位，而回測會在相同評估區段下比較 LSTM 與基準策略，最終輸出到 `RESULTS_DIR`（預設 `backtest_results/`，於 `.env` 設定；含明細、summary 與 comparison 總表）。
+
+**互動式入口（新）**：在專案根目錄執行 `uv run main.py` 可開啟選單（`app/` 內 Data / Train / Backtest / Predict / Pipeline / Results）。選單會從 `historical_data/*.csv` 挑檔；請將 `.env` 的 `SAVE_DIR` 指到同一資料夾（與 `get_stock_data` 預設一致）。細節見 `MAIN_TO_FULL_PROJECT_FLOW.md`。
+
+### Project structure
+
+```text
+EE4016-Project
+|
++-- main.py
++-- get_stock_data.py
++-- train_stock.py
++-- backtest_stock.py
++-- predict_stock.py
++-- run_protocol.py
+|
++-- app
+|   |
+|   +-- menu.py
+|   +-- state.py
+|   +-- constants.py
+|   +-- paths.py
+|   |
+|   +-- actions
+|   |   `-- stock_actions.py
+|   |
+|   +-- services
+|   |   `-- discovery.py
+|   |
+|   +-- ui
+|   |   `-- cli.py
+|   |
+|   `-- menus
+|       +-- data_menu.py
+|       +-- train_menu.py
+|       +-- backtest_menu.py
+|       +-- pipeline_menu.py
+|       +-- predict_menu.py
+|       `-- results_menu.py
+|
++-- historical_data/
++-- model/
++-- backtest_results/
+|
++-- MAIN_TO_DATA_DOWNLOAD_FLOW.md
++-- MAIN_TO_DATA_DOWNLOAD_CODE_PATH.md
+`-- MAIN_TO_FULL_PROJECT_FLOW.md
+```
 
 ---
 
@@ -34,12 +81,22 @@ uv sync
 
 ## 2) 先設定 `.env`（第一次執行必做）
 
-先把 `.env_example` 複製一份並更改名稱成 `.env`，並修改 `SAVE_DIR` 為你本機的 `record` 路徑。
+複製 `.env_example` 為 `.env`。所有主要資料夾路徑都在此設定（相對路徑以專案根目錄為準，亦可用絕對路徑）。
 
 ### `.env` 範例
 
 ```env
-SAVE_DIR=C:/Users/your_name/Desktop/EE4016/Project/record
+SAVE_DIR=historical_data
+RESULTS_DIR=backtest_results
+MODEL_DIR=model
+```
+
+或使用絕對路徑，例如：
+
+```env
+SAVE_DIR=C:/Users/your_name/Desktop/EE4016/Project/historical_data
+RESULTS_DIR=C:/Users/your_name/Desktop/EE4016/Project/backtest_results
+MODEL_DIR=C:/Users/your_name/Desktop/EE4016/Project/model
 ```
 
 設定完成後，再進行語法檢查。
@@ -47,7 +104,7 @@ SAVE_DIR=C:/Users/your_name/Desktop/EE4016/Project/record
 ## 3) 先做語法檢查（建議每次改完先跑）
 
 ```powershell
-uv run python -m py_compile get_stock_data.py train_stock.py predict_stock.py backtest_stock.py run_protocol.py
+uv run python -m py_compile main.py get_stock_data.py train_stock.py predict_stock.py backtest_stock.py run_protocol.py
 ```
 
 若沒有任何輸出，代表語法檢查通過。
@@ -64,12 +121,12 @@ uv run get_stock_data.py --ticker AAPL --years 5 --interval 1d
 
 預期輸出檔案：
 
-- `record/AAPL_5y_1d.csv`
+- `historical_data/AAPL_5y_1d.csv`
 
 ### Step 2: 訓練模型
 
 ```powershell
-uv run train_stock.py --csv_dir record --ticker AAPL --save_model dir_model.pt --window 30 --epochs 5 --seed 42 --eval_threshold 0.5
+uv run train_stock.py --csv_dir historical_data --ticker AAPL --save_model dir_model.pt --window 30 --epochs 5 --seed 42 --eval_threshold 0.5
 ```
 
 預期輸出檔案：
@@ -81,24 +138,24 @@ uv run train_stock.py --csv_dir record --ticker AAPL --save_model dir_model.pt -
 ### Step 3: 推論
 
 ```powershell
-uv run predict_stock.py --csv record/AAPL_5y_1d.csv --model model/AAPL/dir_model.pt
+uv run predict_stock.py --csv historical_data/AAPL_5y_1d.csv --model model/AAPL/dir_model.pt
 ```
 
 預期輸出檔案：
 
-- `result/AAPL/AAPL_5y_1d_pred.csv`
-- （可能）`result/AAPL/AAPL_5y_1d_bad.csv`
+- `backtest_results/AAPL/AAPL_5y_1d_pred.csv`
+- （可能）`backtest_results/AAPL/AAPL_5y_1d_bad.csv`
 
 ### Step 4: 回測（含 baseline 比較）
 
 ```powershell
-uv run backtest_stock.py --csv record/AAPL_5y_1d.csv --model model/AAPL/dir_model.pt --protocol experiment_protocol.json --eval_split test
+uv run backtest_stock.py --csv historical_data/AAPL_5y_1d.csv --model model/AAPL/dir_model.pt --protocol experiment_protocol.json --eval_split test
 ```
 
 預期輸出檔案：
 
-- `result/AAPL/AAPL_5y_1d_bt.csv`
-- `result/AAPL/AAPL_5y_1d_bt_summary.json`
+- `backtest_results/AAPL/AAPL_5y_1d_bt.csv`
+- `backtest_results/AAPL/AAPL_5y_1d_bt_summary.json`
 
 ---
 
@@ -122,7 +179,7 @@ uv run get_stock_data.py --protocol experiment_protocol.json --window_idx 0
 ### 4.2 用 protocol 訓練（split 自動對齊）
 
 ```powershell
-uv run train_stock.py --csv_dir record --ticker AAPL --save_model dir_model.pt --window 30 --epochs 5 --protocol experiment_protocol.json
+uv run train_stock.py --csv_dir historical_data --ticker AAPL --save_model dir_model.pt --window 30 --epochs 5 --protocol experiment_protocol.json
 ```
 
 ### 4.3 一鍵跑 protocol 批次流程
@@ -140,7 +197,7 @@ uv run run_protocol.py --protocol experiment_protocol.json --window_idxs 0 --epo
 
 預期輸出檔案：
 
-- `result/comparison_summary.csv`
+- `backtest_results/comparison_summary.csv`
 
 ---
 
@@ -167,7 +224,7 @@ uv run run_protocol.py --protocol experiment_protocol.json --window_idxs 0 --epo
 
 ### C) `No CSV in ... for ticker ...`
 
-原因：`record` 中找不到對應檔名。  
+原因：`historical_data` 中找不到對應檔名。  
 解法：先跑 `get_stock_data.py`，並確認檔名形如 `AAPL_5y_1d.csv`。
 
 ### D) 指標結果波動很大
@@ -183,16 +240,16 @@ uv run run_protocol.py --protocol experiment_protocol.json --window_idxs 0 --epo
 
 ```powershell
 uv sync
-uv run python -m py_compile get_stock_data.py train_stock.py predict_stock.py backtest_stock.py run_protocol.py
+uv run python -m py_compile main.py get_stock_data.py train_stock.py predict_stock.py backtest_stock.py run_protocol.py
 uv run get_stock_data.py --protocol experiment_protocol.json --window_idx 0
-uv run train_stock.py --csv_dir record --ticker AAPL --save_model dir_model.pt --window 30 --epochs 5 --protocol experiment_protocol.json
-uv run predict_stock.py --csv record/AAPL_5y_1d.csv --model model/AAPL/dir_model.pt
-uv run backtest_stock.py --csv record/AAPL_5y_1d.csv --model model/AAPL/dir_model.pt --protocol experiment_protocol.json --eval_split test
+uv run train_stock.py --csv_dir historical_data --ticker AAPL --save_model dir_model.pt --window 30 --epochs 5 --protocol experiment_protocol.json
+uv run predict_stock.py --csv historical_data/AAPL_5y_1d.csv --model model/AAPL/dir_model.pt
+uv run backtest_stock.py --csv historical_data/AAPL_5y_1d.csv --model model/AAPL/dir_model.pt --protocol experiment_protocol.json --eval_split test
 uv run run_protocol.py --protocol experiment_protocol.json --window_idxs 0 --epochs 1
 ```
 
 Quick Start 產出重點：
 - 模型與 artifacts：`model/AAPL/dir_model.pt`, `dir_model.scaler.pkl`, `dir_model.meta.json`
-- 推論結果：`result/AAPL/AAPL_5y_1d_pred.csv`
-- 回測結果：`result/AAPL/AAPL_5y_1d_bt_summary.json`
-- 批次比較：`result/comparison_summary.csv`
+- 推論結果：`backtest_results/AAPL/AAPL_5y_1d_pred.csv`
+- 回測結果：`backtest_results/AAPL/AAPL_5y_1d_bt_summary.json`
+- 批次比較：`backtest_results/comparison_summary.csv`

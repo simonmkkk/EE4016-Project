@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ..paths import PROJECT_ROOT
+from ..paths import PROJECT_ROOT, SAVE_DIR
 from ..services import infer_ticker_from_csv, pick_csv, pick_model, pick_protocol, rel
 from ..ui import ask, ask_yes_no
 
@@ -68,7 +68,7 @@ def run_train_from_historical_csv():
 
     extra = [
         "--csv_dir",
-        "historical_data",
+        str(SAVE_DIR),
         "--ticker",
         tic,
         "--save_model",
@@ -83,7 +83,7 @@ def run_train_from_historical_csv():
     print("\n" + "-" * 70)
     print("  Train Summary")
     print("-" * 70)
-    print(f"  CSV Dir        : historical_data")
+    print(f"  CSV Dir        : {rel(SAVE_DIR)}")
     print(f"  Ticker         : {tic}")
     print(f"  Epochs         : {epochs}")
     print(f"  Window         : {window}")
