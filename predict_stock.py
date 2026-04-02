@@ -99,9 +99,9 @@ def set_seed(seed: int):
 
 set_seed(args.seed)
 
-# Always save under result/{stock-symbol}/
+# Always save under backtest_results/{stock-symbol}/
 symbol = Path(args.csv).stem.split("_")[0].upper()
-result_dir = Path("result") / symbol
+result_dir = Path("backtest_results") / symbol
 result_dir.mkdir(parents=True, exist_ok=True)
 
 # ╭────────── 讀檔 + granularity ───────────╮
@@ -164,7 +164,6 @@ correct = preds == actual
 high_conf_wrong = (probs >= args.conf_thresh) & (~correct)
 
 # ╭────────── Explanation helpers ───────────╮
-# ─── Explanation helpers ───
 def gen_explanation(feat_row, pred):
     rs, mc, vr = feat_row["rsi"], feat_row["macd"], feat_row["v_ratio"]
     reasons = []

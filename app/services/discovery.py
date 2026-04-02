@@ -1,0 +1,105 @@
+from pathlib import Path
+
+from ..paths import PROJECT_ROOT
+from ..state import load_state, save_state
+from ..ui import choose_from_list
+
+
+def rel(p: Path) -> str:
+    try:
+        return str(p.relative_to(PROJECT_ROOT))
+    except Exception:
+        return str(p)
+
+
+def list_historical_csvs() -> list[Path]:
+    rec = PROJECT_ROOT / "historical_data"
+    return sorted(rec.glob("*.csv"), key=lambda p: p.name.lower()) if rec.exists() else []
+
+
+def list_model_pts() -> list[Path]:
+    mdl = PROJECT_ROOT / "model"
+    return sorted(mdl.glob("*/*.pt"), key=lambda p: str(p).lower()) if mdl.exists() else []
+
+
+def list_protocol_jsons() -> list[Path]:
+    js = sorted(PROJECT_ROOT.glob("*.json"), key=lambda p: p.name.lower())
+
+    def score(p: Path) -> tuple[int, str]:
+        n = p.name.lower()
+        return (0 if "protocol" in n else 1, n)
+
+    return sorted(js, key=score)
+
+
+def infer_ticker_from_csv(csv_path: Path) -> str | None:
+    parts = csv_path.stem.split("_")
+    tic = parts[0].strip().upper() if parts else ""
+    return tic or None
+
+
+def max_lookback_label(max_days: int) -> str:
+    if max_days >= 365:
+        return f"{round(max_days / 365)}y"
+    return f"{max_days}d"
+
+
+def duration_to_years(text: str) -> float | None:
+    raw = text.strip().lower()
+    if not raw:
+        return None
+    if raw.endswith("mo") and raw[:-2].strip().replace(".", "", 1).isdigit():
+        return float(raw[:-2].strip()) / 12
+    if raw.endswith("d") and raw[:-1].strip().replace(".", "", 1).isdigit():
+        return float(raw[:-1].strip()) / 365
+    if raw.endswith("y") and raw[:-1].strip().replace(".", "", 1).isdigit():
+        return float(raw[:-1].strip())
+    if raw.replace(".", "", 1).isdigit():
+        return float(raw)
+    return None
+
+
+def pick_csv(*, state_key: str = "last_csv") -> Path | None:
+    state = load_state()
+    csvs = list_historical_csvs()
+    items = [rel(p) for p in csvs]
+    last = state.get(state_key)
+    default_idx = (items.index(last) + 1) if (last in items) else None
+    chosen = choose_from_list("  Select CSV (historical_data/*.csv)", items, default_index=default_idx)
+    if not chosen:
+        return None
+    state[state_key] = chosen
+    save_state(state)
+    return PROJECT_ROOT / chosen
+
+
+def pick_model(*, prefer_ticker: str | None = None, state_key: str = "last_model") -> Path | None:
+    state = load_state()
+    pts = list_model_pts()
+    if prefer_ticker:
+        pts_pref = [p for p in pts if p.parent.name.upper() == prefer_ticker.upper()]
+        pts = pts_pref or pts
+    items = [rel(p) for p in pts]
+    last = state.get(state_key)
+    default_idx = (items.index(last) + 1) if (last in items) else None
+    chosen = choose_from_list("  Select model (model/*/*.pt)", items, default_index=default_idx)
+    if not chosen:
+        return None
+    state[state_key] = chosen
+    save_state(state)
+    return PROJECT_ROOT / chosen
+
+
+def pick_protocol(*, state_key: str = "last_protocol") -> Path | None:
+    state = load_state()
+    js = list_protocol_jsons()
+    items = [rel(p) for p in js]
+    last = state.get(state_key, "experiment_protocol.json")
+    default_idx = (items.index(last) + 1) if (last in items) else None
+    chosen = choose_from_list("  Select protocol (*.json)", items, default_index=default_idx)
+    if not chosen:
+        return None
+    state[state_key] = chosen
+    save_state(state)
+    return PROJECT_ROOT / chosen
+

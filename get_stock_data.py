@@ -11,16 +11,14 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 def ensure_project_folders() -> None:
-    """Create model/, record/, and result/ under project root if they do not exist."""
-    for name in ("model", "record", "result"):
-        folder = _PROJECT_ROOT / name
-        folder.mkdir(parents=True, exist_ok=True)
+    """Create download folder only (historical_data by default)."""
+    # Create only the downloader target folder; do not pre-create model/result.
+    save_folder = Path(SAVE_DIR)
+    save_folder.mkdir(parents=True, exist_ok=True)
 
 
+SAVE_DIR = os.getenv("SAVE_DIR", str(_PROJECT_ROOT / "historical_data"))
 ensure_project_folders()
-
-SAVE_DIR = os.getenv("SAVE_DIR", str(_PROJECT_ROOT / "record"))
-os.makedirs(SAVE_DIR, exist_ok=True)
 
 # ---------- Parse arguments ----------
 # Interval -> max lookback days (used for prompts and validation)
@@ -48,13 +46,53 @@ def _validate_tickers(tickers: list[str]) -> list[str]:
     return invalid
 
 def get_args():
-    p = argparse.ArgumentParser("Stock OHLCV Downloader (interactive-friendly)")
-    p.add_argument("--ticker", nargs="+", help="Stock ticker(s), space-separated for multiple")
-    p.add_argument("--years", type=float, help="Lookback years (float, e.g. 0.x)")
-    p.add_argument("--interval", type=str, help="Data interval: " + ", ".join(INTERVAL_OPTIONS))
+    """
+    Non-interactive CLI.
+    - Either provide --protocol (and optional --window_idx)
+    - Or provide --ticker + --interval + --years
+    """
+    p = argparse.ArgumentParser("Stock OHLCV Downloader (menu-driven)")
     p.add_argument("--protocol", type=str, help="Path to experiment protocol json")
     p.add_argument("--window_idx", type=int, default=0, help="Index of data window from protocol")
+
+    p.add_argument("--ticker", nargs="+", help="Stock ticker(s), space-separated for multiple")
+    p.add_argument("--years", type=float, help="Lookback years (float, e.g. 2, 0.5)")
+    p.add_argument("--interval", type=str, help="Data interval: " + ", ".join(INTERVAL_OPTIONS))
+
     a = p.parse_args()
+
+    # Interactive fallback when launched directly without args.
+    if len(sys.argv) == 1:
+        print("\n=== Download ‧ Interactive mode ===")
+        t = input("Enter stock ticker(s), space-separated: ").strip()
+        if not t:
+            print("No ticker entered.")
+            sys.exit(0)
+        a.ticker = [x.strip().upper() for x in t.split()]
+
+        opts = ", ".join(INTERVAL_OPTIONS)
+        while True:
+            interval_in = input(f"Enter data interval (default 1d). Options: {opts}\n> ").strip().lower() or "1d"
+            if interval_in in INTERVAL_LIMITS:
+                a.interval = interval_in
+                break
+            print(f"Unsupported interval '{interval_in}'.")
+
+        max_days = INTERVAL_LIMITS[a.interval]
+        max_label = _max_lookback_label(max_days)
+        dur = input(f"Enter historical range (e.g. 30d, 6mo, 2y), max {max_label} [{max_label}]: ").strip() or max_label
+        dur_low = dur.lower()
+        if dur_low.endswith("mo") and dur_low[:-2].strip().replace(".", "", 1).isdigit():
+            a.years = float(dur_low[:-2].strip()) / 12
+        elif dur_low.endswith("d") and dur_low[:-1].strip().replace(".", "", 1).isdigit():
+            a.years = float(dur_low[:-1].strip()) / 365
+        elif dur_low.endswith("y") and dur_low[:-1].strip().replace(".", "", 1).isdigit():
+            a.years = float(dur_low[:-1].strip())
+        elif dur_low.replace(".", "", 1).isdigit():
+            a.years = float(dur_low)
+        else:
+            print("Invalid duration format. Use 30d / 6mo / 2y.")
+            sys.exit(2)
 
     if a.protocol:
         try:
@@ -75,55 +113,20 @@ def get_args():
         a.ticker = [str(t).strip().upper() for t in tickers]
         a.interval = str(w.get("interval", "1d")).lower()
         a.years = float(w.get("years", 5))
+        return a
 
-    # Tickers: always normalized to uppercase (e.g. aapl -> AAPL)
-    if not a.ticker:
-        while True:
-            t = input("Enter stock ticker(s): ").strip()
-            if not t:
-                print("No ticker entered.")
-                sys.exit(0)
-            a.ticker = [x.strip().upper() for x in t.split()]
-            invalid = _validate_tickers(a.ticker)
-            if not invalid:
-                break
-            print(f"Invalid or no data for: {', '.join(invalid)}. Please re-enter ticker(s).\n")
-    else:
-        a.ticker = [x.strip().upper() for x in a.ticker]
-        invalid = _validate_tickers(a.ticker)
-        if invalid:
-            print(f"Invalid or no data for: {', '.join(invalid)}.")
-            sys.exit(1)
+    # Non-protocol mode must be fully specified
+    if not a.ticker or a.years is None or not a.interval:
+        p.print_help()
+        print("\n[ERROR] Missing required args. Use --protocol ... OR --ticker ... --interval ... --years ...")
+        sys.exit(2)
 
-    # Interval: normalized to lowercase (e.g. 5D -> 5d)
-    if a.interval is None:
-        opts = ", ".join(INTERVAL_OPTIONS)
-        while True:
-            it = input(f"Enter data interval (default 1d). Options: {opts}\n> ").strip()
-            a.interval = (it or "1d").lower()
-            if a.interval in INTERVAL_LIMITS:
-                break
-            print(f"Unsupported interval '{a.interval}'. Available: {opts}\n")
-
-    if a.years is None:
-        hint = "default 5y"
-        if a.interval in INTERVAL_LIMITS:
-            md = INTERVAL_LIMITS[a.interval]
-            hint = f"default 5y, max {_max_lookback_label(md)}"
-        raw = input(f"Enter lookback: endwith [d/mo/y] ({hint}): ").strip()
-        if not raw:
-            a.years = 5
-        elif raw.endswith("d") and len(raw) > 1 and raw[:-1].replace(".", "", 1).isdigit():
-            a.years = float(raw[:-1]) / 365
-        elif raw.endswith("mo") and raw[:-2].strip().replace(".", "", 1).isdigit():
-            a.years = float(raw[:-2].strip()) / 12
-        elif raw.endswith("y") and len(raw) > 1 and raw[:-1].replace(".", "", 1).isdigit():
-            a.years = float(raw[:-1])
-        elif raw.replace(".", "", 1).isdigit() and float(raw) > 0:
-            a.years = float(raw)
-        else:
-            a.years = 5
-
+    a.ticker = [x.strip().upper() for x in a.ticker]
+    a.interval = a.interval.lower()
+    invalid = _validate_tickers(a.ticker)
+    if invalid:
+        print(f"Invalid or no data for: {', '.join(invalid)}.")
+        sys.exit(1)
     return a
 
 args = get_args()
@@ -140,7 +143,19 @@ if args.interval not in INTERVAL_LIMITS:
 # ---------- Auto-cap lookback days ----------
 max_days = INTERVAL_LIMITS[args.interval]
 max_years = max_days / 365
-if args.years * 365 > max_days:
+desired_days = args.years * 365
+if desired_days >= max_days:
+    # yfinance 對部分 interval 會要求所選時間範圍必須「小於」上限。
+    # 例如 1h 上限是 730 天時，如果剛好取到 730 天會抓不到資料。
+    # 因此當 desired_days >= max_days 時，統一改成 max_days - 1 天。
+    adjusted_days = max(1, max_days - 1)
+    print(
+        f"{args.interval} supports at most {_max_lookback_label(max_days)}; "
+        f"auto-adjust to {adjusted_days}d to avoid yfinance boundary issue."
+    )
+    args.years = adjusted_days / 365
+elif desired_days > max_days:
+    # 保留舊邏輯的保險分支（通常不會走到，因為上面已涵蓋 >=）
     print(f"{args.interval} supports at most {_max_lookback_label(max_days)}; adjusted.")
     args.years = max_years
 
@@ -149,6 +164,9 @@ if args.years <= 0:
     print("Lookback too small; set to minimum.")
 
 lookback_days = max(1, round(args.years * 365))
+if lookback_days >= max_days:
+    # 再次保險：處理 float + round 造成剛好回到 max_days 的情況
+    lookback_days = max(1, max_days - 1)
 start_date = datetime.date.today() - datetime.timedelta(days=lookback_days)
 # Do not pass end= to yf.download: API treats end as exclusive, so we'd miss today's data
 # Label: days (≤90), months (<1y), or years
@@ -218,4 +236,9 @@ for tic in args.ticker:
     fname = f"{tic.upper()}_{lookback_label}_{args.interval}.csv"
     outpath = os.path.join(SAVE_DIR, fname)
     df.to_csv(outpath, index=False)
-    print(f"Saved {outpath}")
+    out_path_obj = Path(outpath).resolve()
+    try:
+        display_path = out_path_obj.relative_to(_PROJECT_ROOT.resolve())
+    except ValueError:
+        display_path = out_path_obj
+    print(f"Saved {display_path}")

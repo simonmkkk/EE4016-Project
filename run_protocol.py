@@ -29,7 +29,7 @@ def run_cmd(cmd: list[str]):
 
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--protocol", required=True, help="Path to experiment protocol json")
+ap.add_argument("--protocol", help="Path to experiment protocol json")
 ap.add_argument("--epochs", type=int, default=5)
 ap.add_argument("--window", type=int, default=30)
 ap.add_argument("--fee", type=float, default=0.001)
@@ -37,6 +37,28 @@ ap.add_argument("--tickers", nargs="*", help="Optional ticker subset")
 ap.add_argument("--window_idxs", nargs="*", type=int, help="Optional data window index subset")
 ap.add_argument("--out", help="Output comparison csv path")
 args = ap.parse_args()
+
+if len(sys.argv) == 1:
+    print("\n=== Protocol Runner ‧ Interactive mode ===")
+    protocol_in = input("protocol json path [experiment_protocol.json]: ").strip() or "experiment_protocol.json"
+    epochs_in = input("epochs [5]: ").strip() or "5"
+    window_in = input("window [30]: ").strip() or "30"
+    fee_in = input("fee [0.001]: ").strip() or "0.001"
+    out_in = input("out csv path (blank=default backtest_results/comparison_summary.csv): ").strip()
+    tickers_in = input("ticker subset (space-separated, blank=all from protocol): ").strip()
+    idxs_in = input("window_idx subset (space-separated ints, blank=all): ").strip()
+
+    args.protocol = protocol_in.strip('"').strip("'")
+    args.epochs = int(epochs_in)
+    args.window = int(window_in)
+    args.fee = float(fee_in)
+    args.out = out_in.strip('"').strip("'") or None
+    args.tickers = tickers_in.split() if tickers_in else None
+    args.window_idxs = [int(x) for x in idxs_in.split()] if idxs_in else None
+
+if not args.protocol:
+    ap.print_help()
+    raise SystemExit("\n[ERROR] --protocol is required (or run without args for interactive mode).")
 
 protocol_path = Path(args.protocol)
 with open(protocol_path, "r", encoding="utf-8") as f:
@@ -74,7 +96,7 @@ for widx in idxs:
 
     lb = lookback_label(years)
     for tic in tickers:
-        csv_path = Path("record") / f"{tic}_{lb}_{interval}.csv"
+        csv_path = Path("historical_data") / f"{tic}_{lb}_{interval}.csv"
         if not csv_path.exists():
             print(f"[WARN] skip {tic}: csv not found {csv_path}")
             continue
@@ -85,7 +107,7 @@ for widx in idxs:
                 sys.executable,
                 "train_stock.py",
                 "--csv_dir",
-                "record",
+                "historical_data",
                 "--ticker",
                 tic,
                 "--save_model",
@@ -117,7 +139,7 @@ for widx in idxs:
             ]
         )
 
-        summary_path = Path("result") / tic / f"{csv_path.stem}_bt_summary.json"
+        summary_path = Path("backtest_results") / tic / f"{csv_path.stem}_bt_summary.json"
         with open(summary_path, "r", encoding="utf-8") as f:
             s = json.load(f)
         for strat, vals in s.get("strategies", {}).items():
@@ -163,7 +185,7 @@ grouped = (
     .sort_values(["window_idx", "avg_sharpe"], ascending=[True, False])
 )
 
-out_path = Path(args.out) if args.out else Path("result") / "comparison_summary.csv"
+out_path = Path(args.out) if args.out else Path("backtest_results") / "comparison_summary.csv"
 out_path.parent.mkdir(parents=True, exist_ok=True)
 grouped.to_csv(out_path, index=False, encoding="utf-8-sig")
 print(f"[OK] comparison summary saved to {out_path}")
