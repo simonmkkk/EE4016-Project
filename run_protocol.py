@@ -121,6 +121,7 @@ for widx in idxs:
         with open(summary_path, "r", encoding="utf-8") as f:
             s = json.load(f)
         for strat, vals in s.get("strategies", {}).items():
+            pred = s.get("predictive_metrics_model", {})
             rows.append(
                 {
                     "protocol": protocol.get("name", "unnamed"),
@@ -132,7 +133,12 @@ for widx in idxs:
                     "total_return": vals.get("total_return"),
                     "sharpe": vals.get("sharpe"),
                     "max_drawdown": vals.get("max_drawdown"),
+                    "win_rate": vals.get("win_rate"),
+                    "avg_turnover": vals.get("avg_turnover"),
+                    "turnover_rate": vals.get("turnover_rate"),
                     "n_trades": vals.get("n_trades"),
+                    "model_accuracy": pred.get("accuracy") if strat == "model_lstm" else None,
+                    "model_f1": pred.get("f1") if strat == "model_lstm" else None,
                 }
             )
 
@@ -147,7 +153,12 @@ grouped = (
         avg_total_return=("total_return", "mean"),
         avg_sharpe=("sharpe", "mean"),
         avg_max_drawdown=("max_drawdown", "mean"),
+        avg_win_rate=("win_rate", "mean"),
+        avg_turnover=("avg_turnover", "mean"),
+        avg_turnover_rate=("turnover_rate", "mean"),
         avg_n_trades=("n_trades", "mean"),
+        avg_model_accuracy=("model_accuracy", "mean"),
+        avg_model_f1=("model_f1", "mean"),
     )
     .sort_values(["window_idx", "avg_sharpe"], ascending=[True, False])
 )

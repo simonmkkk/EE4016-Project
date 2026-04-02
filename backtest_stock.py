@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch import nn
+from sklearn.metrics import accuracy_score, f1_score
 
 from ta.momentum import RSIIndicator
 from ta.trend import MACD, SMAIndicator
@@ -69,6 +70,23 @@ ap.add_argument("--out", help="output csv filename")
 ap.add_argument("--protocol", type=str, help="Path to experiment protocol json for baseline parameters")
 ap.add_argument("--eval_split", choices=["all", "test"], default="test", help="Evaluate on full data or unseen test split")
 args = ap.parse_args()
+
+
+def infer_periods_per_year(csv_name: str) -> float:
+    name = csv_name.lower()
+    if "_1d" in name or "_5d" in name:
+        return 252.0
+    if "_1h" in name or "_60m" in name:
+        return 252.0 * 6.5
+    if "_30m" in name:
+        return 252.0 * 13.0
+    if "_15m" in name:
+        return 252.0 * 26.0
+    if "_5m" in name:
+        return 252.0 * 78.0
+    if "_1m" in name:
+        return 252.0 * 390.0
+    return 252.0
 
 model_path = Path(args.model)
 meta_path = Path(args.meta) if args.meta else model_path.with_suffix(".meta.json")
@@ -156,6 +174,7 @@ rsi_vals = rsi_vals[start:]
 bb_high = bb_high[start:]
 bb_low = bb_low[start:]
 close_eval = close_eval[start:]
+periods_per_year = infer_periods_per_year(Path(args.csv).name)
 
 def strategy_metrics(signals: np.ndarray):
     turnover = np.abs(np.diff(np.insert(signals, 0, 0))).astype(np.float64)
@@ -163,12 +182,18 @@ def strategy_metrics(signals: np.ndarray):
     equity = np.cumprod(1.0 + strat_ret) if len(strat_ret) else np.array([], dtype=np.float64)
     roll_max = np.maximum.accumulate(equity) if len(equity) else np.array([], dtype=np.float64)
     max_dd = float(np.min(equity / roll_max - 1.0)) if len(equity) else 0.0
-    sharpe = float(np.sqrt(252) * strat_ret.mean() / (strat_ret.std() + 1e-12)) if len(strat_ret) else 0.0
+    sharpe = float(np.sqrt(periods_per_year) * strat_ret.mean() / (strat_ret.std() + 1e-12)) if len(strat_ret) else 0.0
+    non_zero = strat_ret[strat_ret != 0]
+    win_rate = float((non_zero > 0).mean()) if len(non_zero) else 0.0
+    turnover_rate = float((turnover > 0).mean()) if len(turnover) else 0.0
     return strat_ret, equity, turnover, {
         "n_trades": int(np.sum(turnover)),
         "total_return": float(equity[-1] - 1.0) if len(equity) else 0.0,
         "sharpe": sharpe,
         "max_drawdown": max_dd,
+        "win_rate": win_rate,
+        "avg_turnover": float(turnover.mean()) if len(turnover) else 0.0,
+        "turnover_rate": turnover_rate,
     }
 
 signals_model = np.where(probs > args.threshold, 1, -1).astype(np.int8)
@@ -182,6 +207,13 @@ bh_ret, _, _, bh_summary = strategy_metrics(signals_bh)
 macd_ret, _, _, macd_summary = strategy_metrics(signals_macd)
 rsi_ret, _, _, rsi_summary = strategy_metrics(signals_rsi)
 bb_ret, _, _, bb_summary = strategy_metrics(signals_bb)
+
+true_up = (fwd_ret > 0).astype(int)
+pred_up = (signals_model > 0).astype(int)
+predictive_metrics = {
+    "accuracy": float(accuracy_score(true_up, pred_up)) if len(true_up) else 0.0,
+    "f1": float(f1_score(true_up, pred_up, zero_division=0)) if len(true_up) else 0.0,
+}
 
 out = pd.DataFrame(
     {
@@ -221,6 +253,7 @@ summary = {
         "rsi": rsi_summary,
         "bollinger": bb_summary,
     },
+    "predictive_metrics_model": predictive_metrics,
     "model_path": str(model_path),
     "meta_path": str(meta_path),
     "scaler_path": str(scaler_path),
@@ -233,6 +266,8 @@ print(f"[OK] backtest saved to {out_path}")
 print(f"[OK] summary saved to {summary_path}")
 print(
     f"[BT] model_return={summary['strategies']['model_lstm']['total_return']:.4f} "
+    f"model_acc={summary['predictive_metrics_model']['accuracy']:.4f} "
+    f"model_f1={summary['predictive_metrics_model']['f1']:.4f} "
     f"bh_return={summary['strategies']['buy_and_hold']['total_return']:.4f} "
     f"macd_return={summary['strategies']['macd']['total_return']:.4f} "
     f"rsi_return={summary['strategies']['rsi']['total_return']:.4f} "
