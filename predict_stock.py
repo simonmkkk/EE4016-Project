@@ -6,14 +6,13 @@ predict_stock.py  ── 推論 + 解釋版
   ‧ 標記高信心卻錯誤
   ‧ 為每筆結果產生 explanation / why_wrong / improve_tip
 """
-import sys, argparse
+import sys, argparse, json, pickle, random
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
 from torch import nn
-from sklearn.preprocessing import StandardScaler
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -83,7 +82,21 @@ ap.add_argument("--conf_thresh", type=float, default=0.8,
                 help="若 pred_prob ≥ conf_thresh 且預測錯，標記 high_conf_wrong")
 ap.add_argument("--use_attn", action="store_true")
 ap.add_argument("--out", help="輸出檔名 (default 自動)")
+ap.add_argument("--scaler", help="scaler 檔路徑 (.pkl), default: 與 model 同名 .scaler.pkl")
+ap.add_argument("--meta", help="metadata 路徑 (.json), default: 與 model 同名 .meta.json")
+ap.add_argument("--seed", type=int, default=42)
 args = ap.parse_args()
+
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+set_seed(args.seed)
 
 # Always save under result/{stock-symbol}/
 symbol = Path(args.csv).stem.split("_")[0].upper()
@@ -102,8 +115,34 @@ FEATS = [c for c in df.columns if c not in ["date", "log_ret", "direction"]]
 if "granularity" not in FEATS:
     FEATS.append("granularity")
 
-sc = StandardScaler(); df[FEATS] = sc.fit_transform(df[FEATS]).astype(np.float32)
+# Load metadata/scaler produced by training (strict leakage control)
+model_path = Path(args.model)
+meta_path = Path(args.meta) if args.meta else model_path.with_suffix(".meta.json")
+scaler_path = Path(args.scaler) if args.scaler else model_path.with_suffix(".scaler.pkl")
+
+trained_feats = FEATS
+if meta_path.exists():
+    with open(meta_path, "r", encoding="utf-8") as f:
+        meta = json.load(f)
+    trained_feats = meta.get("features", FEATS)
+    if not args.use_attn:
+        args.use_attn = bool(meta.get("use_attn", False))
+    if args.window == 30 and isinstance(meta.get("window"), int):
+        args.window = meta["window"]
+
+missing_feats = [c for c in trained_feats if c not in df.columns]
+if missing_feats:
+    sys.exit(f"[ERROR] Missing required features from metadata: {missing_feats}")
+FEATS = trained_feats
+
+if not scaler_path.exists():
+    sys.exit(f"[ERROR] scaler file not found: {scaler_path}")
+with open(scaler_path, "rb") as f:
+    sc = pickle.load(f)
+df[FEATS] = sc.transform(df[FEATS]).astype(np.float32)
 X = build_seq(df, FEATS, args.window)
+if X.shape[0] == 0:
+    sys.exit(f"[ERROR] Data rows are insufficient for window={args.window}")
 
 # ╭────────── Inference ─────────────────────╮
 model = LSTMDir(len(FEATS), att=args.use_attn).to(DEVICE)
