@@ -1,4 +1,4 @@
-import os, argparse, datetime, sys
+import os, argparse, datetime, sys, json
 from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
@@ -52,7 +52,29 @@ def get_args():
     p.add_argument("--ticker", nargs="+", help="Stock ticker(s), space-separated for multiple")
     p.add_argument("--years", type=float, help="Lookback years (float, e.g. 0.x)")
     p.add_argument("--interval", type=str, help="Data interval: " + ", ".join(INTERVAL_OPTIONS))
+    p.add_argument("--protocol", type=str, help="Path to experiment protocol json")
+    p.add_argument("--window_idx", type=int, default=0, help="Index of data window from protocol")
     a = p.parse_args()
+
+    if a.protocol:
+        try:
+            with open(a.protocol, "r", encoding="utf-8") as f:
+                protocol = json.load(f)
+        except Exception as e:
+            print(f"Failed to read protocol {a.protocol}: {e}")
+            sys.exit(1)
+        tickers = protocol.get("ticker_universe", [])
+        windows = protocol.get("data_windows", [])
+        if not tickers or not windows:
+            print("Protocol must include non-empty ticker_universe and data_windows.")
+            sys.exit(1)
+        if a.window_idx < 0 or a.window_idx >= len(windows):
+            print(f"window_idx out of range [0, {len(windows)-1}]")
+            sys.exit(1)
+        w = windows[a.window_idx]
+        a.ticker = [str(t).strip().upper() for t in tickers]
+        a.interval = str(w.get("interval", "1d")).lower()
+        a.years = float(w.get("years", 5))
 
     # Tickers: always normalized to uppercase (e.g. aapl -> AAPL)
     if not a.ticker:

@@ -1,0 +1,158 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+run_protocol.py -- batch runner for protocol-based experiments.
+"""
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pandas as pd
+
+
+def lookback_label(years: float) -> str:
+    days = max(1, round(years * 365))
+    if days <= 90:
+        return f"{days}d"
+    if days < 365:
+        return f"{round(days / 30)}mo"
+    return f"{round(days / 365)}y"
+
+
+def run_cmd(cmd: list[str]):
+    print("[RUN]", " ".join(cmd))
+    proc = subprocess.run(cmd)
+    if proc.returncode != 0:
+        raise RuntimeError(f"Command failed: {' '.join(cmd)}")
+
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--protocol", required=True, help="Path to experiment protocol json")
+ap.add_argument("--epochs", type=int, default=5)
+ap.add_argument("--window", type=int, default=30)
+ap.add_argument("--fee", type=float, default=0.001)
+ap.add_argument("--tickers", nargs="*", help="Optional ticker subset")
+ap.add_argument("--window_idxs", nargs="*", type=int, help="Optional data window index subset")
+ap.add_argument("--out", help="Output comparison csv path")
+args = ap.parse_args()
+
+protocol_path = Path(args.protocol)
+with open(protocol_path, "r", encoding="utf-8") as f:
+    protocol = json.load(f)
+
+all_tickers = [str(t).upper() for t in protocol.get("ticker_universe", [])]
+if not all_tickers:
+    raise ValueError("Protocol ticker_universe is empty")
+tickers = [t.upper() for t in args.tickers] if args.tickers else all_tickers
+
+windows = protocol.get("data_windows", [])
+if not windows:
+    raise ValueError("Protocol data_windows is empty")
+idxs = args.window_idxs if args.window_idxs else list(range(len(windows)))
+
+rows = []
+for widx in idxs:
+    if widx < 0 or widx >= len(windows):
+        raise ValueError(f"window_idx out of range: {widx}")
+    w = windows[widx]
+    interval = str(w.get("interval", "1d")).lower()
+    years = float(w.get("years", 5))
+
+    # Step 1: fetch data for protocol window
+    run_cmd(
+        [
+            sys.executable,
+            "get_stock_data.py",
+            "--protocol",
+            str(protocol_path),
+            "--window_idx",
+            str(widx),
+        ]
+    )
+
+    lb = lookback_label(years)
+    for tic in tickers:
+        csv_path = Path("record") / f"{tic}_{lb}_{interval}.csv"
+        if not csv_path.exists():
+            print(f"[WARN] skip {tic}: csv not found {csv_path}")
+            continue
+
+        # Step 2: train model for each ticker using protocol split settings
+        run_cmd(
+            [
+                sys.executable,
+                "train_stock.py",
+                "--csv_dir",
+                "record",
+                "--ticker",
+                tic,
+                "--save_model",
+                "dir_model.pt",
+                "--window",
+                str(args.window),
+                "--epochs",
+                str(args.epochs),
+                "--protocol",
+                str(protocol_path),
+            ]
+        )
+
+        # Step 3: backtest and compare against baselines on test split
+        run_cmd(
+            [
+                sys.executable,
+                "backtest_stock.py",
+                "--csv",
+                str(csv_path),
+                "--model",
+                str(Path("model") / tic / "dir_model.pt"),
+                "--protocol",
+                str(protocol_path),
+                "--eval_split",
+                "test",
+                "--fee",
+                str(args.fee),
+            ]
+        )
+
+        summary_path = Path("result") / tic / f"{csv_path.stem}_bt_summary.json"
+        with open(summary_path, "r", encoding="utf-8") as f:
+            s = json.load(f)
+        for strat, vals in s.get("strategies", {}).items():
+            rows.append(
+                {
+                    "protocol": protocol.get("name", "unnamed"),
+                    "window_idx": widx,
+                    "interval": interval,
+                    "years": years,
+                    "ticker": tic,
+                    "strategy": strat,
+                    "total_return": vals.get("total_return"),
+                    "sharpe": vals.get("sharpe"),
+                    "max_drawdown": vals.get("max_drawdown"),
+                    "n_trades": vals.get("n_trades"),
+                }
+            )
+
+if not rows:
+    raise RuntimeError("No results collected. Check data/training/backtest outputs.")
+
+df = pd.DataFrame(rows)
+grouped = (
+    df.groupby(["protocol", "window_idx", "interval", "years", "strategy"], as_index=False)
+    .agg(
+        tickers=("ticker", "nunique"),
+        avg_total_return=("total_return", "mean"),
+        avg_sharpe=("sharpe", "mean"),
+        avg_max_drawdown=("max_drawdown", "mean"),
+        avg_n_trades=("n_trades", "mean"),
+    )
+    .sort_values(["window_idx", "avg_sharpe"], ascending=[True, False])
+)
+
+out_path = Path(args.out) if args.out else Path("result") / "comparison_summary.csv"
+out_path.parent.mkdir(parents=True, exist_ok=True)
+grouped.to_csv(out_path, index=False, encoding="utf-8-sig")
+print(f"[OK] comparison summary saved to {out_path}")

@@ -1,0 +1,19 @@
+{
+  "name": "default_v2_protocol",
+  "ticker_universe": ["AAPL", "MSFT", "NVDA", "AMZN", "TSLA"],
+  "data_windows": [
+    { "interval": "1d", "years": 5.0 },
+    { "interval": "1h", "years": 2.0 }
+  ],
+  "split": {
+    "method": "ratio",
+    "train_ratio": 0.7,
+    "val_ratio": 0.15
+  },
+  "baseline_params": {
+    "buy_and_hold": {},
+    "macd": { "fast": 12, "slow": 26, "signal": 9 },
+    "rsi": { "window": 14, "oversold": 30, "overbought": 70 },
+    "bollinger": { "window": 20, "std": 2.0 }
+  }
+}

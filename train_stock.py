@@ -115,6 +115,7 @@ ap.add_argument("--train_ratio", type=float, default=0.7)
 ap.add_argument("--val_ratio", type=float, default=0.15)
 ap.add_argument("--eval_threshold", type=float, default=0.5)
 ap.add_argument("--walk_forward_folds", type=int, default=0, help="Optional rolling evaluation folds on test split")
+ap.add_argument("--protocol", type=str, help="Path to experiment protocol json")
 
 # ========= 互動模式補丁 (for train_stock.py) =========
 if len(sys.argv) == 1:
@@ -141,6 +142,18 @@ if len(sys.argv) == 1:
 # ========= 補丁結束 ====================================
 
 args = ap.parse_args()
+
+protocol = {}
+if args.protocol:
+    try:
+        with open(args.protocol, "r", encoding="utf-8") as f:
+            protocol = json.load(f)
+    except Exception as e:
+        sys.exit(f"[ERROR] Failed to read protocol {args.protocol}: {e}")
+    split_cfg = protocol.get("split", {})
+    if split_cfg.get("method") == "ratio":
+        args.train_ratio = float(split_cfg.get("train_ratio", args.train_ratio))
+        args.val_ratio = float(split_cfg.get("val_ratio", args.val_ratio))
 
 if not (0 < args.train_ratio < 1 and 0 < args.val_ratio < 1 and args.train_ratio + args.val_ratio < 1):
     sys.exit("[ERROR] train_ratio and val_ratio must be in (0,1), and train_ratio + val_ratio < 1")
@@ -381,6 +394,8 @@ meta = {
         "command": "python " + " ".join(sys.argv),
         "git_commit": get_git_commit_hash(),
     },
+    "protocol": protocol if protocol else None,
+    "protocol_path": args.protocol,
     "model_path": str(save_path),
     "scaler_path": str(scaler_path),
 }

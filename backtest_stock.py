@@ -66,6 +66,8 @@ ap.add_argument("--window", type=int, default=30)
 ap.add_argument("--threshold", type=float, default=None)
 ap.add_argument("--fee", type=float, default=0.001, help="transaction fee per position change")
 ap.add_argument("--out", help="output csv filename")
+ap.add_argument("--protocol", type=str, help="Path to experiment protocol json for baseline parameters")
+ap.add_argument("--eval_split", choices=["all", "test"], default="test", help="Evaluate on full data or unseen test split")
 args = ap.parse_args()
 
 model_path = Path(args.model)
@@ -80,6 +82,11 @@ with open(meta_path, "r", encoding="utf-8") as f:
     meta = json.load(f)
 with open(scaler_path, "rb") as f:
     scaler = pickle.load(f)
+
+protocol = {}
+if args.protocol:
+    with open(args.protocol, "r", encoding="utf-8") as f:
+        protocol = json.load(f)
 
 if args.threshold is None:
     args.threshold = float(meta.get("eval_threshold", 0.5))
@@ -109,23 +116,85 @@ model.eval()
 with torch.no_grad():
     probs = torch.sigmoid(model(torch.tensor(X).to(DEVICE))).cpu().numpy().flatten()
 
-signals = np.where(probs > args.threshold, 1, -1).astype(np.int8)
 fwd_ret = df["fwd_ret"].iloc[args.window:].values.astype(np.float64)
-turnover = np.abs(np.diff(np.insert(signals, 0, 0))).astype(np.float64)
-strategy_ret = signals * fwd_ret - args.fee * turnover
-equity = np.cumprod(1.0 + strategy_ret)
-roll_max = np.maximum.accumulate(equity)
-max_drawdown = float(np.min(equity / roll_max - 1.0)) if len(equity) else 0.0
-sharpe = float(np.sqrt(252) * strategy_ret.mean() / (strategy_ret.std() + 1e-12)) if len(strategy_ret) else 0.0
+bp = protocol.get("baseline_params", {})
+macd_p = bp.get("macd", {"fast": 12, "slow": 26, "signal": 9})
+rsi_p = bp.get("rsi", {"window": 14, "oversold": 30, "overbought": 70})
+bb_p = bp.get("bollinger", {"window": 20, "std": 2.0})
+
+macd_obj = MACD(
+    df["close"],
+    window_fast=int(macd_p.get("fast", 12)),
+    window_slow=int(macd_p.get("slow", 26)),
+    window_sign=int(macd_p.get("signal", 9)),
+)
+rsi_obj = RSIIndicator(df["close"], window=int(rsi_p.get("window", 14)))
+bb_obj = BollingerBands(
+    df["close"],
+    window=int(bb_p.get("window", 20)),
+    window_dev=float(bb_p.get("std", 2.0)),
+)
+macd_line = macd_obj.macd().iloc[args.window:].fillna(0).values
+macd_signal = macd_obj.macd_signal().iloc[args.window:].fillna(0).values
+rsi_vals = rsi_obj.rsi().iloc[args.window:].fillna(50).values
+bb_high = bb_obj.bollinger_hband().iloc[args.window:].bfill().fillna(df["close"].iloc[args.window:]).values
+bb_low = bb_obj.bollinger_lband().iloc[args.window:].bfill().fillna(df["close"].iloc[args.window:]).values
+close_eval = df["close"].iloc[args.window:].values
+
+if args.eval_split == "test":
+    tr = float(meta.get("train_ratio", 0.7))
+    vr = float(meta.get("val_ratio", 0.15))
+    start = int(len(fwd_ret) * (tr + vr))
+else:
+    start = 0
+
+fwd_ret = fwd_ret[start:]
+probs = probs[start:]
+macd_line = macd_line[start:]
+macd_signal = macd_signal[start:]
+rsi_vals = rsi_vals[start:]
+bb_high = bb_high[start:]
+bb_low = bb_low[start:]
+close_eval = close_eval[start:]
+
+def strategy_metrics(signals: np.ndarray):
+    turnover = np.abs(np.diff(np.insert(signals, 0, 0))).astype(np.float64)
+    strat_ret = signals * fwd_ret - args.fee * turnover
+    equity = np.cumprod(1.0 + strat_ret) if len(strat_ret) else np.array([], dtype=np.float64)
+    roll_max = np.maximum.accumulate(equity) if len(equity) else np.array([], dtype=np.float64)
+    max_dd = float(np.min(equity / roll_max - 1.0)) if len(equity) else 0.0
+    sharpe = float(np.sqrt(252) * strat_ret.mean() / (strat_ret.std() + 1e-12)) if len(strat_ret) else 0.0
+    return strat_ret, equity, turnover, {
+        "n_trades": int(np.sum(turnover)),
+        "total_return": float(equity[-1] - 1.0) if len(equity) else 0.0,
+        "sharpe": sharpe,
+        "max_drawdown": max_dd,
+    }
+
+signals_model = np.where(probs > args.threshold, 1, -1).astype(np.int8)
+signals_bh = np.ones_like(signals_model, dtype=np.int8)
+signals_macd = np.where(macd_line > macd_signal, 1, -1).astype(np.int8)
+signals_rsi = np.where(rsi_vals < float(rsi_p.get("oversold", 30)), 1, np.where(rsi_vals > float(rsi_p.get("overbought", 70)), -1, 0)).astype(np.int8)
+signals_bb = np.where(close_eval < bb_low, 1, np.where(close_eval > bb_high, -1, 0)).astype(np.int8)
+
+model_ret, equity, turnover, model_summary = strategy_metrics(signals_model)
+bh_ret, _, _, bh_summary = strategy_metrics(signals_bh)
+macd_ret, _, _, macd_summary = strategy_metrics(signals_macd)
+rsi_ret, _, _, rsi_summary = strategy_metrics(signals_rsi)
+bb_ret, _, _, bb_summary = strategy_metrics(signals_bb)
 
 out = pd.DataFrame(
     {
         "pred_prob": np.round(probs, 6),
-        "signal": signals,
+        "signal": signals_model,
         "fwd_ret": fwd_ret,
         "turnover": turnover,
-        "strategy_ret": strategy_ret,
+        "strategy_ret": model_ret,
         "equity": equity,
+        "bh_ret": bh_ret,
+        "macd_ret": macd_ret,
+        "rsi_ret": rsi_ret,
+        "bb_ret": bb_ret,
     }
 )
 
@@ -139,10 +208,19 @@ out.to_csv(out_path, index=False, encoding="utf-8-sig")
 summary = {
     "threshold": args.threshold,
     "fee": args.fee,
-    "n_trades": int(np.sum(turnover)),
-    "total_return": float(equity[-1] - 1.0) if len(equity) else 0.0,
-    "sharpe": sharpe,
-    "max_drawdown": max_drawdown,
+    "eval_split": args.eval_split,
+    "protocol_baseline_params": {
+        "macd": macd_p,
+        "rsi": rsi_p,
+        "bollinger": bb_p,
+    },
+    "strategies": {
+        "model_lstm": model_summary,
+        "buy_and_hold": bh_summary,
+        "macd": macd_summary,
+        "rsi": rsi_summary,
+        "bollinger": bb_summary,
+    },
     "model_path": str(model_path),
     "meta_path": str(meta_path),
     "scaler_path": str(scaler_path),
@@ -154,6 +232,9 @@ with open(summary_path, "w", encoding="utf-8") as f:
 print(f"[OK] backtest saved to {out_path}")
 print(f"[OK] summary saved to {summary_path}")
 print(
-    f"[BT] total_return={summary['total_return']:.4f} "
-    f"sharpe={summary['sharpe']:.4f} mdd={summary['max_drawdown']:.4f} trades={summary['n_trades']}"
+    f"[BT] model_return={summary['strategies']['model_lstm']['total_return']:.4f} "
+    f"bh_return={summary['strategies']['buy_and_hold']['total_return']:.4f} "
+    f"macd_return={summary['strategies']['macd']['total_return']:.4f} "
+    f"rsi_return={summary['strategies']['rsi']['total_return']:.4f} "
+    f"bb_return={summary['strategies']['bollinger']['total_return']:.4f}"
 )
