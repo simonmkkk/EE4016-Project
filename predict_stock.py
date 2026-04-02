@@ -61,13 +61,14 @@ ap = argparse.ArgumentParser()
 if len(sys.argv) == 1:  # ---- Interactive ----
     print("\n=== Interactive mode ===")
     ipt = lambda msg, d='': input(f"{msg} [{d}] ").strip() or d
-    sys.argv += [
-        "--csv",          ipt("CSV 路徑"),
-        "--model",        ipt("模型 (.pt) 路徑"),
-        "--window",       ipt("window", '30'),
-        "--threshold",    ipt("threshold", '0.4'),
-        "--conf_thresh",  ipt("high-conf 閾值", '0.8'),
-    ]
+    csv_path = ipt("CSV 路徑")
+    model_path = ipt("模型 (.pt) 路徑")
+    window = ipt("window", "30")
+    threshold = input("threshold (留空=自動讀 metadata eval_threshold) [] ").strip()
+    conf_thresh = ipt("high-conf 閾值", "0.8")
+    sys.argv += ["--csv", csv_path, "--model", model_path, "--window", window, "--conf_thresh", conf_thresh]
+    if threshold:
+        sys.argv += ["--threshold", threshold]
     if input("使用 Attention? (y/n) [n] ").lower().startswith('y'):
         sys.argv.append("--use_attn")
     out_ = input("輸出檔名 (留空自動命名): ").strip()
@@ -77,7 +78,7 @@ if len(sys.argv) == 1:  # ---- Interactive ----
 ap.add_argument("--csv",   required=True)
 ap.add_argument("--model", required=True)
 ap.add_argument("--window", type=int, default=30)
-ap.add_argument("--threshold", type=float, default=0.4)
+ap.add_argument("--threshold", type=float, default=None)
 ap.add_argument("--conf_thresh", type=float, default=0.8,
                 help="若 pred_prob ≥ conf_thresh 且預測錯，標記 high_conf_wrong")
 ap.add_argument("--use_attn", action="store_true")
@@ -121,6 +122,7 @@ meta_path = Path(args.meta) if args.meta else model_path.with_suffix(".meta.json
 scaler_path = Path(args.scaler) if args.scaler else model_path.with_suffix(".scaler.pkl")
 
 trained_feats = FEATS
+meta = None
 if meta_path.exists():
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
@@ -129,6 +131,12 @@ if meta_path.exists():
         args.use_attn = bool(meta.get("use_attn", False))
     if args.window == 30 and isinstance(meta.get("window"), int):
         args.window = meta["window"]
+
+if args.threshold is None:
+    if isinstance(meta, dict) and isinstance(meta.get("eval_threshold"), (int, float)):
+        args.threshold = float(meta["eval_threshold"])
+    else:
+        args.threshold = 0.4
 
 missing_feats = [c for c in trained_feats if c not in df.columns]
 if missing_feats:

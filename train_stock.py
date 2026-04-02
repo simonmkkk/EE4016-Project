@@ -8,12 +8,13 @@ train_stock.py   ── 只做訓練
       --save_model dir_model.pt \
       --window 30 --epochs 40 --use_attn
 """
-import os, glob, sys, math, argparse, json, pickle, random
+import os, glob, sys, math, argparse, json, pickle, random, hashlib, subprocess
 from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
 from torch import nn
+import sklearn
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
@@ -49,8 +50,19 @@ def build_seq(frame, feats, window):
         y.append(d[i])
     return np.array(X), np.array(y).reshape(-1, 1)
 
+def build_seq_multi(frames, feats, window):
+    xs, ys = [], []
+    for fr in frames:
+        X_part, y_part = build_seq(fr, feats, window)
+        if X_part.shape[0] > 0:
+            xs.append(X_part)
+            ys.append(y_part)
+    if not xs:
+        return np.empty((0, window, len(feats)), dtype=np.float32), np.empty((0, 1), dtype=np.float32)
+    return np.concatenate(xs, axis=0), np.concatenate(ys, axis=0)
+
 def evaluate_split(model: nn.Module, frame: pd.DataFrame, feats, window: int, device, threshold: float):
-    X_eval, y_eval = build_seq(frame, feats, window)
+    X_eval, y_eval = build_seq_multi(frame, feats, window)
     if X_eval.shape[0] == 0:
         return None
     model.eval()
@@ -102,6 +114,7 @@ ap.add_argument("--seed", type=int, default=42)
 ap.add_argument("--train_ratio", type=float, default=0.7)
 ap.add_argument("--val_ratio", type=float, default=0.15)
 ap.add_argument("--eval_threshold", type=float, default=0.5)
+ap.add_argument("--walk_forward_folds", type=int, default=0, help="Optional rolling evaluation folds on test split")
 
 # ========= 互動模式補丁 (for train_stock.py) =========
 if len(sys.argv) == 1:
@@ -133,6 +146,8 @@ if not (0 < args.train_ratio < 1 and 0 < args.val_ratio < 1 and args.train_ratio
     sys.exit("[ERROR] train_ratio and val_ratio must be in (0,1), and train_ratio + val_ratio < 1")
 if not (0 < args.eval_threshold < 1):
     sys.exit("[ERROR] eval_threshold must be in (0,1)")
+if args.walk_forward_folds < 0:
+    sys.exit("[ERROR] walk_forward_folds must be >= 0")
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -153,7 +168,52 @@ def read_and_fe(path: str):                           # ★ NEW
     is_min = (df["date"].dt.hour != 0) | (df["date"].dt.minute != 0) | (df["date"].dt.second != 0)
     df["granularity"] = is_min.astype(np.int8)        # ★ NEW
     df = df.sort_values("date")
-    return fe(df)
+    out = fe(df)
+    out["series_id"] = Path(path).stem
+    return out
+
+def split_frame_by_ratio(frame: pd.DataFrame, train_ratio: float, val_ratio: float):
+    n = len(frame)
+    tr_end = int(n * train_ratio)
+    va_end = int(n * (train_ratio + val_ratio))
+    train = frame.iloc[:tr_end].copy()
+    val = frame.iloc[tr_end:va_end].copy()
+    test = frame.iloc[va_end:].copy()
+    return train, val, test
+
+def file_sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def get_git_commit_hash() -> str | None:
+    try:
+        out = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.STDOUT)
+        return out.decode("utf-8").strip()
+    except Exception:
+        return None
+
+def walk_forward_metrics(model, test_frames, feats, window, device, threshold, folds: int):
+    if folds <= 1:
+        return []
+    per_fold = []
+    for idx, fr in enumerate(test_frames):
+        n = len(fr)
+        if n <= window + folds:
+            continue
+        step = n // folds
+        for fidx in range(folds):
+            start = fidx * step
+            end = n if fidx == folds - 1 else (fidx + 1) * step
+            chunk = fr.iloc[start:end].copy()
+            met = evaluate_split(model, [chunk], feats, window, device, threshold)
+            if met is not None:
+                met["series_index"] = idx
+                met["fold_index"] = fidx
+                per_fold.append(met)
+    return per_fold
 
 # ╭─────────────── 主流程 ──────────────────╮
 csv_list = args.csvs or []
@@ -176,45 +236,49 @@ model_dir.mkdir(parents=True, exist_ok=True)
 save_path = model_dir / (Path(args.save_model).name or "dir_model.pt")
 
 frames = [read_and_fe(p) for p in csv_list]           # ★ NEW
-data   = pd.concat(frames).sort_values("date").reset_index(drop=True)
 
-FEATS = [c for c in data.columns if c not in ["date", "log_ret", "direction"]]
+FEATS = [c for c in frames[0].columns if c not in ["date", "log_ret", "direction", "series_id"]]
 if "granularity" not in FEATS:                        # ★ NEW
     FEATS.append("granularity")
 
-sc = StandardScaler()
+split_triplets = [split_frame_by_ratio(fr, args.train_ratio, args.val_ratio) for fr in frames]
+train_frames = [t[0] for t in split_triplets if len(t[0]) > 0]
+val_frames = [t[1] for t in split_triplets if len(t[1]) > 0]
+test_frames = [t[2] for t in split_triplets if len(t[2]) > 0]
 
-# Chronological split to avoid look-ahead leakage
-n_total = len(data)
-tr_end = int(n_total * args.train_ratio)
-va_end = int(n_total * (args.train_ratio + args.val_ratio))
-if tr_end <= args.window or va_end <= tr_end:
-    sys.exit("[ERROR] Not enough rows after split; adjust ratios or provide more data")
-
-train_df = data.iloc[:tr_end].copy()
-val_df = data.iloc[tr_end:va_end].copy()
-test_df = data.iloc[va_end:].copy()
-if len(test_df) == 0:
-    sys.exit("[ERROR] Test split is empty; adjust ratios")
+if not train_frames:
+    sys.exit("[ERROR] Train split is empty for all series")
 
 # Fit scaler on train only (strict leakage control)
 sc = StandardScaler()
-train_df[FEATS] = sc.fit_transform(train_df[FEATS]).astype(np.float32)
-val_df[FEATS] = sc.transform(val_df[FEATS]).astype(np.float32)
-test_df[FEATS] = sc.transform(test_df[FEATS]).astype(np.float32)
+train_stack = pd.concat(train_frames, ignore_index=True)
+sc.fit(train_stack[FEATS])
+for fr in train_frames:
+    fr[FEATS] = sc.transform(fr[FEATS]).astype(np.float32)
+for fr in val_frames:
+    fr[FEATS] = sc.transform(fr[FEATS]).astype(np.float32)
+for fr in test_frames:
+    fr[FEATS] = sc.transform(fr[FEATS]).astype(np.float32)
 
-X, y = build_seq(train_df, FEATS, args.window)
+X, y = build_seq_multi(train_frames, FEATS, args.window)
 if X.shape[0] == 0:
-    sys.exit(f"[ERROR] Train rows are insufficient for window={args.window}")
+    sys.exit(f"[ERROR] Train sequences are insufficient for window={args.window}")
+X_val, y_val = build_seq_multi(val_frames, FEATS, args.window)
+if X_val.shape[0] == 0:
+    sys.exit(f"[ERROR] Validation sequences are insufficient for window={args.window}")
 
 ds = torch.utils.data.TensorDataset(torch.tensor(X), torch.tensor(y))
-dl = torch.utils.data.DataLoader(ds, args.batch, shuffle=True)
+dl_gen = torch.Generator()
+dl_gen.manual_seed(args.seed)
+dl = torch.utils.data.DataLoader(ds, args.batch, shuffle=True, generator=dl_gen)
 
 model = LSTMDir(len(FEATS), att=args.use_attn).to(DEVICE)
 pos_ratio = y.mean(); neg_ratio = 1 - pos_ratio
 safe_pos = max(float(pos_ratio), 1e-6)
 crit = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([neg_ratio/safe_pos]).to(DEVICE))
 opt  = torch.optim.Adam(model.parameters(), args.lr)
+val_xb = torch.tensor(X_val).to(DEVICE)
+val_yb = torch.tensor(y_val).to(DEVICE)
 
 best, wait = math.inf, 0
 for ep in range(args.epochs):
@@ -224,10 +288,13 @@ for ep in range(args.epochs):
         opt.zero_grad()
         loss = crit(model(xb), yb); loss.backward(); opt.step()
         loss_sum += loss.item() * len(xb)
-    avg = loss_sum / len(ds)
-    print(f"[{ep+1:03d}] loss={avg:.4f}")
-    if avg < best:
-        best, wait = avg, 0
+    avg_train = loss_sum / len(ds)
+    model.eval()
+    with torch.no_grad():
+        avg_val = crit(model(val_xb), val_yb).item()
+    print(f"[{ep+1:03d}] train_loss={avg_train:.4f} val_loss={avg_val:.4f}")
+    if avg_val < best:
+        best, wait = avg_val, 0
         torch.save(model.state_dict(), save_path)
     else:
         wait += 1
@@ -244,8 +311,11 @@ with open(scaler_path, "wb") as f:
 # Evaluate best checkpoint on val/test splits
 best_model = LSTMDir(len(FEATS), att=args.use_attn).to(DEVICE)
 best_model.load_state_dict(torch.load(save_path, map_location=DEVICE))
-val_metrics = evaluate_split(best_model, val_df, FEATS, args.window, DEVICE, args.eval_threshold)
-test_metrics = evaluate_split(best_model, test_df, FEATS, args.window, DEVICE, args.eval_threshold)
+val_metrics = evaluate_split(best_model, val_frames, FEATS, args.window, DEVICE, args.eval_threshold)
+test_metrics = evaluate_split(best_model, test_frames, FEATS, args.window, DEVICE, args.eval_threshold)
+wf_metrics = walk_forward_metrics(
+    best_model, test_frames, FEATS, args.window, DEVICE, args.eval_threshold, args.walk_forward_folds
+)
 
 if val_metrics is None:
     print(f"[WARN] val rows are insufficient for window={args.window}, skip val metrics")
@@ -269,20 +339,47 @@ else:
         f"f1={test_metrics['f1']:.4f} "
         f"thr={test_metrics['threshold']:.2f}"
     )
+if wf_metrics:
+    print(f"[WF] collected {len(wf_metrics)} fold metrics")
 
 meta = {
     "seed": args.seed,
     "window": args.window,
     "eval_threshold": args.eval_threshold,
+    "walk_forward_folds": args.walk_forward_folds,
     "features": FEATS,
     "use_attn": args.use_attn,
     "train_ratio": args.train_ratio,
     "val_ratio": args.val_ratio,
     "test_ratio": 1 - args.train_ratio - args.val_ratio,
-    "split_sizes": {"train": len(train_df), "val": len(val_df), "test": len(test_df)},
+    "split_sizes_rows": {
+        "train": int(sum(len(fr) for fr in train_frames)),
+        "val": int(sum(len(fr) for fr in val_frames)),
+        "test": int(sum(len(fr) for fr in test_frames)),
+    },
+    "split_sizes_sequences": {
+        "train": int(X.shape[0]),
+        "val": int(X_val.shape[0]),
+        "test": int(build_seq_multi(test_frames, FEATS, args.window)[0].shape[0]),
+    },
+    "versions": {
+        "python": sys.version.split()[0],
+        "torch": torch.__version__,
+        "numpy": np.__version__,
+        "pandas": pd.__version__,
+        "sklearn": sklearn.__version__,
+    },
+    "data_fingerprints": {
+        str(Path(p)): file_sha256(p) for p in sorted(csv_list)
+    },
     "metrics": {
         "val": val_metrics,
         "test": test_metrics,
+        "walk_forward": wf_metrics,
+    },
+    "reproducibility": {
+        "command": "python " + " ".join(sys.argv),
+        "git_commit": get_git_commit_hash(),
     },
     "model_path": str(save_path),
     "scaler_path": str(scaler_path),
