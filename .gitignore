@@ -10,6 +10,6 @@ __pycache__/
 *.csv
 *.pt
 
-record/
+historical_data/
 model/
-result/
+backtest_results/

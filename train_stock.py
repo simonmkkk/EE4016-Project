@@ -122,10 +122,11 @@ if len(sys.argv) == 1:
     print("\n=== Train ‧ Interactive mode ===")
     csv_mode = input("用資料夾還是逐檔？(d=資料夾 / f=多檔) [d] ").strip().lower()
     if csv_mode.startswith("f"):
-        csvs = input("請輸入多個 CSV 路徑 (以空白分隔): ").strip().split()
+        csvs_raw = input("請輸入多個 CSV 路徑 (以空白分隔): ").strip()
+        csvs = [p.strip().strip('"').strip("'") for p in csvs_raw.split()]
         sys.argv += ["--csvs", *csvs]
     else:
-        csv_dir = input("請輸入資料夾路徑 (內含一批 *.csv): ").strip() or "."
+        csv_dir = input("請輸入資料夾路徑 (內含一批 *.csv): ").strip().strip('"').strip("'") or "."
         sys.argv += ["--csv_dir", csv_dir]
 
     mdl = input("模型輸出檔名 (如 dir_model.pt) [dir_model.pt] ").strip() or "dir_model.pt"

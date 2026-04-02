@@ -6,6 +6,7 @@ backtest_stock.py -- leakage-safe backtest using saved model/scaler/meta artifac
 import argparse
 import json
 import pickle
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -59,8 +60,8 @@ class LSTMDir(nn.Module):
 
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--csv", required=True)
-ap.add_argument("--model", required=True)
+ap.add_argument("--csv")
+ap.add_argument("--model")
 ap.add_argument("--meta", help="default: same basename as model")
 ap.add_argument("--scaler", help="default: same basename as model")
 ap.add_argument("--window", type=int, default=30)
@@ -70,6 +71,26 @@ ap.add_argument("--out", help="output csv filename")
 ap.add_argument("--protocol", type=str, help="Path to experiment protocol json for baseline parameters")
 ap.add_argument("--eval_split", choices=["all", "test"], default="test", help="Evaluate on full data or unseen test split")
 args = ap.parse_args()
+
+if len(sys.argv) == 1:
+    print("\n=== Backtest ‧ Interactive mode ===")
+    csv_in = input("CSV path (e.g. historical_data/AAPL_2y_1h.csv): ").strip()
+    model_in = input("Model .pt path (e.g. model/AAPL/dir_model.pt): ").strip()
+    fee_in = input("fee [0.001]: ").strip() or "0.001"
+    split_in = input("eval_split (test/all) [test]: ").strip().lower() or "test"
+    protocol_in = input("protocol json path (blank=none): ").strip()
+    threshold_in = input("threshold (blank=use meta eval_threshold): ").strip()
+
+    args.csv = csv_in.strip('"').strip("'")
+    args.model = model_in.strip('"').strip("'")
+    args.fee = float(fee_in)
+    args.eval_split = split_in if split_in in {"test", "all"} else "test"
+    args.protocol = protocol_in.strip('"').strip("'") or None
+    args.threshold = float(threshold_in) if threshold_in else None
+
+if not args.csv or not args.model:
+    ap.print_help()
+    raise SystemExit("\n[ERROR] --csv and --model are required (or run without args for interactive mode).")
 
 
 def infer_periods_per_year(csv_name: str) -> float:
@@ -231,7 +252,7 @@ out = pd.DataFrame(
 )
 
 symbol = Path(args.csv).stem.split("_")[0].upper()
-result_dir = Path("result") / symbol
+result_dir = Path("backtest_results") / symbol
 result_dir.mkdir(parents=True, exist_ok=True)
 out_name = Path(args.out).name if args.out else f"{Path(args.csv).stem}_bt.csv"
 out_path = result_dir / out_name
