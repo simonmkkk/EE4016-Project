@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-train_stock.py   ── 只做訓練
-用法範例：
-  python train_stock.py \
-      --csvs AAPL_d.csv AAPL_1m.csv \
-      --save_model dir_model.pt \
+train_stock.py -- training only.
+
+Example:
+  python train_stock.py \\
+      --csvs AAPL_1d_10y.csv AAPL_1m_6d.csv \\
+      --save_model model.pt \\
       --window 30 --epochs 40 --use_attn
 """
 import os, glob, sys, math, argparse, json, pickle, random, hashlib, subprocess
@@ -15,6 +16,8 @@ _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 from app.paths import MODEL_DIR
+from app.fe import add_technical_indicators
+from app.constants import INTERVAL_ID_ORDER, INTERVAL_ID_UNKNOWN, interval_id_from_csv_stem
 import numpy as np
 import pandas as pd
 import torch
@@ -23,28 +26,15 @@ import sklearn
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
-# ─── 裝置 ──────────────────────────────────
+# --- Device ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ─── Technical Indicators ─────────────────
-from ta.momentum   import RSIIndicator
-from ta.trend      import MACD, SMAIndicator
-from ta.volatility import BollingerBands, AverageTrueRange
-
-# ╭────────── Feature Engineering ──────────╮
+# --- Feature engineering ---
 def fe(df: pd.DataFrame):
-    df = df.copy()
-    df["rsi"]   = RSIIndicator(df["close"]).rsi()
-    df["macd"]  = MACD(df["close"]).macd_diff()
-    df["bbw"]   = BollingerBands(df["close"]).bollinger_wband()
-    df["atr"]   = AverageTrueRange(df["high"], df["low"], df["close"]).average_true_range()
-    df["vma20"] = SMAIndicator(df["volume"], 20).sma_indicator()
-    df["v_ratio"] = df["volume"] / df["vma20"]
-    df["body"]  = (df["open"] - df["close"]).abs()
-    df["range"] = df["high"] - df["low"]
-    df["log_ret"]  = np.log(df["close"]).diff().shift(-1)
-    df["direction"] = (df["log_ret"] > 0).astype(np.float32)
-    return df.dropna().reset_index(drop=True)
+    out = add_technical_indicators(df)
+    out["log_ret"] = np.log(out["close"]).diff().shift(-1)
+    out["direction"] = (out["log_ret"] > 0).astype(np.float32)
+    return out.dropna().reset_index(drop=True)
 
 def build_seq(frame, feats, window):
     X, y = [], []
@@ -85,7 +75,7 @@ def evaluate_split(model: nn.Module, frame: pd.DataFrame, feats, window: int, de
         "threshold": float(threshold),
     }
 
-# ╭───────────── 模型 ──────────────────────╮
+# --- Model ---
 class LSTMDir(nn.Module):
     def __init__(self, d_in:int, hid:int=128, att:bool=False):
         super().__init__()
@@ -103,17 +93,20 @@ class LSTMDir(nn.Module):
             o = o[:, -1]
         return self.fc(o)
 
-# ╭───────────── CLI ───────────────────────╮
+# --- CLI ---
 ap = argparse.ArgumentParser()
-ap.add_argument("--csvs", nargs="*", help="多個 csv 檔路徑")
-ap.add_argument("--csv_dir", help="含一批 csv 的資料夾")
-ap.add_argument("--ticker", help="只用此代號的 csv (與 --csv_dir 合用時篩選，如 AAPL)；也決定 model/{ticker}/ 資料夾")
+ap.add_argument("--csvs", nargs="*", help="paths to one or more CSV files")
+ap.add_argument("--csv_dir", help="directory containing CSV files to load")
+ap.add_argument(
+    "--ticker",
+    help="filter CSVs by ticker when using --csv_dir (e.g. AAPL); also sets model/{ticker}/ output folder",
+)
 ap.add_argument("--save_model", required=True)
 ap.add_argument("--window", type=int, default=30)
 ap.add_argument("--epochs", type=int, default=40)
 ap.add_argument("--batch",  type=int, default=256)
 ap.add_argument("--lr",     type=float, default=1e-3)
-ap.add_argument("--patience", type=int, default=6)
+ap.add_argument("--patience", type=int, default=15)
 ap.add_argument("--use_attn", action="store_true")
 ap.add_argument("--seed", type=int, default=42)
 ap.add_argument("--train_ratio", type=float, default=0.7)
@@ -122,30 +115,30 @@ ap.add_argument("--eval_threshold", type=float, default=0.5)
 ap.add_argument("--walk_forward_folds", type=int, default=0, help="Optional rolling evaluation folds on test split")
 ap.add_argument("--protocol", type=str, help="Path to experiment protocol json")
 
-# ========= 互動模式補丁 (for train_stock.py) =========
+# --- Interactive mode when no CLI args ---
 if len(sys.argv) == 1:
-    print("\n=== Train ‧ Interactive mode ===")
-    csv_mode = input("用資料夾還是逐檔？(d=資料夾 / f=多檔) [d] ").strip().lower()
+    print("\n=== Train -- interactive mode ===")
+    csv_mode = input("Load from directory or list files? (d=directory / f=files) [d] ").strip().lower()
     if csv_mode.startswith("f"):
-        csvs_raw = input("請輸入多個 CSV 路徑 (以空白分隔): ").strip()
+        csvs_raw = input("Enter CSV paths (space-separated): ").strip()
         csvs = [p.strip().strip('"').strip("'") for p in csvs_raw.split()]
         sys.argv += ["--csvs", *csvs]
     else:
-        csv_dir = input("請輸入資料夾路徑 (內含一批 *.csv): ").strip().strip('"').strip("'") or "."
+        csv_dir = input("Directory path (contains *.csv): ").strip().strip('"').strip("'") or "."
         sys.argv += ["--csv_dir", csv_dir]
 
-    mdl = input("模型輸出檔名 (如 dir_model.pt) [dir_model.pt] ").strip() or "dir_model.pt"
+    mdl = input("Output model filename (e.g. model.pt) [model.pt] ").strip() or "model.pt"
     if not mdl.endswith(".pt"):
         mdl += ".pt"
     sys.argv += ["--save_model", mdl]
 
-    win = input("window 長度 [30] ").strip() or "30"
+    win = input("window length [30] ").strip() or "30"
     epc = input("epochs [40] ").strip() or "40"
-    att = input("使用 Attention? (y/n) [n] ").strip().lower().startswith("y")
+    att = input("Use attention? (y/n) [n] ").strip().lower().startswith("y")
     sys.argv += ["--window", win, "--epochs", epc]
     if att:
         sys.argv.append("--use_attn")
-# ========= 補丁結束 ====================================
+# --- end interactive patch ---
 
 args = ap.parse_args()
 
@@ -179,16 +172,18 @@ def set_seed(seed: int):
 
 set_seed(args.seed)
 
-# ╭────────── 讀檔 & FE（含頻率判斷） ──────────╮
-def read_and_fe(path: str):                           # ★ NEW
+# --- Load CSV + feature engineering (bar frequency hint) ---
+def read_and_fe(path: str):
     df = pd.read_csv(path, parse_dates=["date"])
     df["date"] = pd.to_datetime(df["date"], utc=True).dt.tz_localize(None)
-    # 0 = 日線、1 = 分鐘線（只要時間成份非 00:00:00 視為分鐘線）
+    # 0 = daily bar, 1 = intraday if time component is not 00:00:00
     is_min = (df["date"].dt.hour != 0) | (df["date"].dt.minute != 0) | (df["date"].dt.second != 0)
-    df["granularity"] = is_min.astype(np.int8)        # ★ NEW
+    df["granularity"] = is_min.astype(np.int8)
     df = df.sort_values("date")
     out = fe(df)
     out["series_id"] = Path(path).stem
+    # Ordinal interval id from filename (0..len-1); unknown token -> INTERVAL_ID_UNKNOWN (excluded from StandardScaler).
+    out["interval_id"] = np.float32(interval_id_from_csv_stem(Path(path).stem))
     return out
 
 def split_frame_by_ratio(frame: pd.DataFrame, train_ratio: float, val_ratio: float):
@@ -234,7 +229,81 @@ def walk_forward_metrics(model, test_frames, feats, window, device, threshold, f
                 per_fold.append(met)
     return per_fold
 
-# ╭─────────────── 主流程 ──────────────────╮
+
+LINE_WIDTH = 70
+
+
+def print_kv_section(title: str, rows: list[tuple[str, str]], border: str = "="):
+    print("\n" + border * LINE_WIDTH)
+    print(title)
+    print(border * LINE_WIDTH)
+    for key, value in rows:
+        print(f"  {key:<14}: {value}")
+    print(border * LINE_WIDTH)
+
+
+def print_eval_section(val_metrics, test_metrics, window: int):
+    print("\n" + "=" * LINE_WIDTH)
+    print("FINAL EVALUATION")
+    print("=" * LINE_WIDTH)
+
+    if val_metrics is None and test_metrics is None:
+        print(f"[WARN] val/test rows are insufficient for window={window}")
+        return
+
+    print(f"  {'split':<6}{'n':>8}{'acc':>10}{'prec':>10}{'rec':>10}{'f1':>10}{'thr':>8}")
+    print("  " + "-" * (LINE_WIDTH - 2))
+
+    def _print_row(name: str, metrics):
+        print(
+            f"  {name:<6}"
+            f"{metrics['n_samples']:>8}"
+            f"{metrics['accuracy']:>10.4f}"
+            f"{metrics['precision']:>10.4f}"
+            f"{metrics['recall']:>10.4f}"
+            f"{metrics['f1']:>10.4f}"
+            f"{metrics['threshold']:>8.2f}"
+        )
+
+    if val_metrics is None:
+        print(f"  {'VAL':<6}{'N/A':>8}{'-':>10}{'-':>10}{'-':>10}{'-':>10}{'-':>8}")
+        print(f"  [WARN] val rows are insufficient for window={window}")
+    else:
+        _print_row("VAL", val_metrics)
+
+    if test_metrics is None:
+        print(f"  {'TEST':<6}{'N/A':>8}{'-':>10}{'-':>10}{'-':>10}{'-':>10}{'-':>8}")
+        print(f"  [WARN] test rows are insufficient for window={window}")
+    else:
+        _print_row("TEST", test_metrics)
+
+    print("=" * LINE_WIDTH)
+
+
+def print_training_header(symbol, csv_list, save_path, args):
+    test_ratio = 1 - args.train_ratio - args.val_ratio
+    print_kv_section(
+        "TRAINING CONFIGURATION",
+        [
+            ("ticker", symbol),
+            ("csv count", str(len(csv_list))),
+            ("save path", str(save_path)),
+            ("window", str(args.window)),
+            ("epochs", str(args.epochs)),
+            ("batch", str(args.batch)),
+            ("lr", str(args.lr)),
+            ("patience", str(args.patience)),
+            ("use_attn", str(args.use_attn)),
+            ("split ratios", f"train={args.train_ratio:.2f} val={args.val_ratio:.2f} test={test_ratio:.2f}"),
+        ],
+        border="=",
+    )
+    print("  input csvs")
+    for path in csv_list:
+        print(f"    - {path}")
+    print("-" * LINE_WIDTH)
+
+# --- Main training flow ---
 csv_list = args.csvs or []
 if args.csv_dir:
     all_csv = glob.glob(os.path.join(args.csv_dir, "*.csv"))
@@ -242,7 +311,7 @@ if args.csv_dir:
         ticker_upper = args.ticker.strip().upper()
         csv_list += [p for p in all_csv if Path(p).stem.upper().startswith(ticker_upper + "_")]
         if not csv_list:
-            sys.exit(f"[ERROR] No CSV in {args.csv_dir!r} for ticker {ticker_upper} (e.g. {ticker_upper}_5y_1d.csv)")
+            sys.exit(f"[ERROR] No CSV in {args.csv_dir!r} for ticker {ticker_upper} (e.g. {ticker_upper}_1d_10y.csv)")
     else:
         csv_list += all_csv
 if not csv_list:
@@ -252,13 +321,38 @@ if not csv_list:
 symbol = (args.ticker.strip().upper() if args.ticker else Path(csv_list[0]).stem.split("_")[0].upper())
 model_dir = MODEL_DIR / symbol
 model_dir.mkdir(parents=True, exist_ok=True)
-save_path = model_dir / (Path(args.save_model).name or "dir_model.pt")
+save_path = model_dir / (Path(args.save_model).name or "model.pt")
+print_training_header(symbol, csv_list, save_path, args)
 
-frames = [read_and_fe(p) for p in csv_list]           # ★ NEW
+empty_paths: list[str] = []
+frames: list[pd.DataFrame] = []
+for p in csv_list:
+    fr = read_and_fe(p)
+    if len(fr) == 0:
+        empty_paths.append(p)
+    else:
+        frames.append(fr)
+if empty_paths:
+    print(
+        f"[WARN] Skipped {len(empty_paths)} CSV(s) with no rows after feature engineering "
+        "(series too short for indicators + next-bar target):"
+    )
+    for ep in empty_paths:
+        print(f"    - {ep}")
+if not frames:
+    sys.exit(
+        "[ERROR] No usable rows after feature engineering. "
+        "Use longer histories or fewer intraday intervals with almost no bars."
+    )
 
 FEATS = [c for c in frames[0].columns if c not in ["date", "log_ret", "direction", "series_id"]]
-if "granularity" not in FEATS:                        # ★ NEW
+if "granularity" not in FEATS:
     FEATS.append("granularity")
+if "interval_id" not in FEATS:
+    FEATS.append("interval_id")
+
+# interval_id is ordinal (0..K); do not pass through StandardScaler.
+FEATS_SCALED = [c for c in FEATS if c != "interval_id"]
 
 split_triplets = [split_frame_by_ratio(fr, args.train_ratio, args.val_ratio) for fr in frames]
 train_frames = [t[0] for t in split_triplets if len(t[0]) > 0]
@@ -271,13 +365,13 @@ if not train_frames:
 # Fit scaler on train only (strict leakage control)
 sc = StandardScaler()
 train_stack = pd.concat(train_frames, ignore_index=True)
-sc.fit(train_stack[FEATS])
+sc.fit(train_stack[FEATS_SCALED])
 for fr in train_frames:
-    fr[FEATS] = sc.transform(fr[FEATS]).astype(np.float32)
+    fr[FEATS_SCALED] = sc.transform(fr[FEATS_SCALED]).astype(np.float32)
 for fr in val_frames:
-    fr[FEATS] = sc.transform(fr[FEATS]).astype(np.float32)
+    fr[FEATS_SCALED] = sc.transform(fr[FEATS_SCALED]).astype(np.float32)
 for fr in test_frames:
-    fr[FEATS] = sc.transform(fr[FEATS]).astype(np.float32)
+    fr[FEATS_SCALED] = sc.transform(fr[FEATS_SCALED]).astype(np.float32)
 
 X, y = build_seq_multi(train_frames, FEATS, args.window)
 if X.shape[0] == 0:
@@ -285,6 +379,21 @@ if X.shape[0] == 0:
 X_val, y_val = build_seq_multi(val_frames, FEATS, args.window)
 if X_val.shape[0] == 0:
     sys.exit(f"[ERROR] Validation sequences are insufficient for window={args.window}")
+
+test_seq_count = build_seq_multi(test_frames, FEATS, args.window)[0].shape[0]
+print_kv_section(
+    "TRAINING DATA SUMMARY",
+    [
+        ("features", str(len(FEATS))),
+        ("train rows", str(sum(len(fr) for fr in train_frames))),
+        ("val rows", str(sum(len(fr) for fr in val_frames))),
+        ("test rows", str(sum(len(fr) for fr in test_frames))),
+        ("train seq", str(X.shape[0])),
+        ("val seq", str(X_val.shape[0])),
+        ("test seq", str(test_seq_count)),
+    ],
+    border="-",
+)
 
 ds = torch.utils.data.TensorDataset(torch.tensor(X), torch.tensor(y))
 dl_gen = torch.Generator()
@@ -311,15 +420,25 @@ for ep in range(args.epochs):
     model.eval()
     with torch.no_grad():
         avg_val = crit(model(val_xb), val_yb).item()
-    print(f"[{ep+1:03d}] train_loss={avg_train:.4f} val_loss={avg_val:.4f}")
-    if avg_val < best:
+    improved = avg_val < best
+    if improved:
         best, wait = avg_val, 0
         torch.save(model.state_dict(), save_path)
     else:
         wait += 1
-        if wait >= args.patience:
-            print("[early stop]"); break
-print(f"[OK] saved to {save_path}")
+
+    print(
+        f"[E{ep+1:03d}/{args.epochs:03d}] "
+        f"train={avg_train:.4f} "
+        f"val={avg_val:.4f} "
+        f"best={best:.4f} "
+        f"wait={wait}/{args.patience}"
+    )
+
+    if not improved and wait >= args.patience:
+        print(f"[STOP] Early stopping at epoch {ep+1} (patience={args.patience})")
+        break
+print(f"[OK] model saved: {save_path}")
 
 # Save scaler + metadata next to model
 scaler_path = save_path.with_suffix(".scaler.pkl")
@@ -336,28 +455,7 @@ wf_metrics = walk_forward_metrics(
     best_model, test_frames, FEATS, args.window, DEVICE, args.eval_threshold, args.walk_forward_folds
 )
 
-if val_metrics is None:
-    print(f"[WARN] val rows are insufficient for window={args.window}, skip val metrics")
-else:
-    print(
-        f"[VAL] n={val_metrics['n_samples']} "
-        f"acc={val_metrics['accuracy']:.4f} "
-        f"prec={val_metrics['precision']:.4f} "
-        f"rec={val_metrics['recall']:.4f} "
-        f"f1={val_metrics['f1']:.4f} "
-        f"thr={val_metrics['threshold']:.2f}"
-    )
-if test_metrics is None:
-    print(f"[WARN] test rows are insufficient for window={args.window}, skip test metrics")
-else:
-    print(
-        f"[TEST] n={test_metrics['n_samples']} "
-        f"acc={test_metrics['accuracy']:.4f} "
-        f"prec={test_metrics['precision']:.4f} "
-        f"rec={test_metrics['recall']:.4f} "
-        f"f1={test_metrics['f1']:.4f} "
-        f"thr={test_metrics['threshold']:.2f}"
-    )
+print_eval_section(val_metrics, test_metrics, args.window)
 if wf_metrics:
     print(f"[WF] collected {len(wf_metrics)} fold metrics")
 
@@ -367,6 +465,9 @@ meta = {
     "eval_threshold": args.eval_threshold,
     "walk_forward_folds": args.walk_forward_folds,
     "features": FEATS,
+    "features_scaled": FEATS_SCALED,
+    "interval_id_map": {str(i): name for i, name in enumerate(INTERVAL_ID_ORDER)}
+    | {str(INTERVAL_ID_UNKNOWN): "unknown"},
     "use_attn": args.use_attn,
     "train_ratio": args.train_ratio,
     "val_ratio": args.val_ratio,
@@ -407,5 +508,5 @@ meta = {
 }
 with open(meta_path, "w", encoding="utf-8") as f:
     json.dump(meta, f, ensure_ascii=False, indent=2)
-print(f"[OK] saved scaler to {scaler_path}")
-print(f"[OK] saved metadata to {meta_path}")
+print(f"[OK] scaler saved: {scaler_path}")
+print(f"[OK] metadata saved: {meta_path}")

@@ -73,15 +73,15 @@ uv run main.py
 
 **主選單選項**
 
-| 輸入 | 區塊 | 行為（對應腳本） |
-|------|------|------------------|
-| `1` | Data | 依 ticker／interval／歷史區間下載（`get_stock_data.py`） |
-| `2` | Train | 從歷史 CSV 挑檔並推斷 ticker 後訓練（`train_stock.py`） |
-| `3` | Backtest | 挑 CSV 與模型回測（`backtest_stock.py`） |
-| `4` | Predict | 挑 CSV 與模型推論（含解釋欄位）（`predict_stock.py`） |
-| `5` | Pipeline | 執行 protocol runner（`run_protocol.py`） |
-| `6` | Results | 讀取並顯示 `RESULTS_DIR` 下的 `comparison_summary.csv` 摘要 |
-| `0` | — | 結束程式 |
+| 輸入 | 區塊     | 行為（對應腳本）                                            |
+| ---- | -------- | ----------------------------------------------------------- |
+| `1`  | Data     | 依 ticker／interval／歷史區間下載（`get_stock_data.py`）    |
+| `2`  | Train    | 從歷史 CSV 挑檔並推斷 ticker 後訓練（`train_stock.py`）     |
+| `3`  | Backtest | 挑 CSV 與模型回測（`backtest_stock.py`）                    |
+| `4`  | Predict  | 挑 CSV 與模型推論（含解釋欄位）（`predict_stock.py`）       |
+| `5`  | Pipeline | 執行 protocol runner（`run_protocol.py`）                   |
+| `6`  | Results  | 讀取並顯示 `RESULTS_DIR` 下的 `comparison_summary.csv` 摘要 |
+| `0`  | —        | 結束程式                                                    |
 
 輸入不在上表中的內容會提示重新選擇。在要求輸入時按 **Ctrl+C**（或送達 EOF）會顯示離開訊息並結束。進入子選單後另有獨立選項；多數子選單以 **`0` 返回上一層**。
 
@@ -276,19 +276,19 @@ uv run get_stock_data.py --ticker AAPL --years 5 --interval 1d
 ### Step 2: 訓練模型
 
 ```powershell
-uv run train_stock.py --csv_dir historical_data --ticker AAPL --save_model dir_model.pt --window 30 --epochs 5 --seed 42 --eval_threshold 0.5
+uv run train_stock.py --csv_dir historical_data --ticker AAPL --save_model model.pt --window 30 --epochs 5 --seed 42 --eval_threshold 0.5
 ```
 
 預期輸出檔案：
 
-- `model/AAPL/dir_model.pt`
-- `model/AAPL/dir_model.scaler.pkl`
-- `model/AAPL/dir_model.meta.json`
+- `model/AAPL/model.pt`
+- `model/AAPL/model.scaler.pkl`
+- `model/AAPL/model.meta.json`
 
 ### Step 3: 推論
 
 ```powershell
-uv run predict_stock.py --csv historical_data/AAPL_5y_1d.csv --model model/AAPL/dir_model.pt
+uv run predict_stock.py --csv historical_data/AAPL_5y_1d.csv --model model/AAPL/model.pt
 ```
 
 預期輸出檔案：
@@ -299,7 +299,7 @@ uv run predict_stock.py --csv historical_data/AAPL_5y_1d.csv --model model/AAPL/
 ### Step 4: 回測（含 baseline 比較）
 
 ```powershell
-uv run backtest_stock.py --csv historical_data/AAPL_5y_1d.csv --model model/AAPL/dir_model.pt --protocol experiment_protocol.json --eval_split test
+uv run backtest_stock.py --csv historical_data/AAPL_5y_1d.csv --model model/AAPL/model.pt --protocol experiment_protocol.json --eval_split test
 ```
 
 預期輸出檔案：
@@ -329,7 +329,7 @@ uv run get_stock_data.py --protocol experiment_protocol.json --window_idx 0
 ### 4.2 用 protocol 訓練（split 自動對齊）
 
 ```powershell
-uv run train_stock.py --csv_dir historical_data --ticker AAPL --save_model dir_model.pt --window 30 --epochs 5 --protocol experiment_protocol.json
+uv run train_stock.py --csv_dir historical_data --ticker AAPL --save_model model.pt --window 30 --epochs 5 --protocol experiment_protocol.json
 ```
 
 ### 4.3 一鍵跑 protocol 批次流程
@@ -394,14 +394,14 @@ uv run run_protocol.py --protocol experiment_protocol.json --window_idxs 0 --epo
 uv sync
 uv run python -m py_compile main.py get_stock_data.py train_stock.py predict_stock.py backtest_stock.py run_protocol.py
 uv run get_stock_data.py --protocol experiment_protocol.json --window_idx 0
-uv run train_stock.py --csv_dir historical_data --ticker AAPL --save_model dir_model.pt --window 30 --epochs 5 --protocol experiment_protocol.json
-uv run predict_stock.py --csv historical_data/AAPL_5y_1d.csv --model model/AAPL/dir_model.pt
-uv run backtest_stock.py --csv historical_data/AAPL_5y_1d.csv --model model/AAPL/dir_model.pt --protocol experiment_protocol.json --eval_split test
+uv run train_stock.py --csv_dir historical_data --ticker AAPL --save_model model.pt --window 30 --epochs 5 --protocol experiment_protocol.json
+uv run predict_stock.py --csv historical_data/AAPL_5y_1d.csv --model model/AAPL/model.pt
+uv run backtest_stock.py --csv historical_data/AAPL_5y_1d.csv --model model/AAPL/model.pt --protocol experiment_protocol.json --eval_split test
 uv run run_protocol.py --protocol experiment_protocol.json --window_idxs 0 --epochs 1
 ```
 
 Quick Start 產出重點：
-- 模型與 artifacts：`model/AAPL/dir_model.pt`, `dir_model.scaler.pkl`, `dir_model.meta.json`
+- 模型與 artifacts：`model/AAPL/model.pt`, `model.scaler.pkl`, `model.meta.json`
 - 推論結果：`backtest_results/AAPL/AAPL_5y_1d_pred.csv`
 - 回測結果：`backtest_results/AAPL/AAPL_5y_1d_bt_summary.json`
 - 批次比較：`backtest_results/comparison_summary.csv`

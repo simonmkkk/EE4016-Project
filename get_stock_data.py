@@ -1,4 +1,4 @@
-import os, argparse, datetime, sys, json
+import os, argparse, datetime, sys, json, warnings
 from pathlib import Path
 import pandas as pd
 import yfinance as yf
@@ -21,7 +21,7 @@ ensure_project_folders()
 # Interval -> max lookback days (used for prompts and validation)
 INTERVAL_LIMITS = {
     "1m": 7, "2m": 60, "5m": 60, "15m": 60, "30m": 60,
-    "60m": 730, "90m": 730, "1h": 730,
+    "60m": 730, "90m": 60, "1h": 730,
     "1d": 3650, "5d": 3650, "1wk": 3650, "1mo": 3650, "3mo": 3650
 }
 INTERVAL_OPTIONS = list(INTERVAL_LIMITS.keys())
@@ -54,7 +54,7 @@ def get_args():
 
     p.add_argument("--ticker", nargs="+", help="Stock ticker(s), space-separated for multiple")
     p.add_argument("--years", type=float, help="Lookback years (float, e.g. 2, 0.5)")
-    p.add_argument("--interval", type=str, help="Data interval: " + ", ".join(INTERVAL_OPTIONS))
+    p.add_argument("--interval", nargs="+", help="Data interval(s): " + ", ".join(INTERVAL_OPTIONS))
 
     a = p.parse_args()
 
@@ -69,13 +69,14 @@ def get_args():
 
         opts = ", ".join(INTERVAL_OPTIONS)
         while True:
-            interval_in = input(f"Enter data interval (default 1d). Options: {opts}\n> ").strip().lower() or "1d"
-            if interval_in in INTERVAL_LIMITS:
-                a.interval = interval_in
+            interval_in = input(f"Enter data interval(s), comma-separated (default 1d). Options: {opts}\n> ").strip().lower() or "1d"
+            interval_items = [x.strip() for x in interval_in.replace(",", " ").split() if x.strip()]
+            if interval_items and all(item in INTERVAL_LIMITS for item in interval_items):
+                a.interval = interval_items
                 break
-            print(f"Unsupported interval '{interval_in}'.")
+            print(f"Unsupported interval(s) '{interval_in}'.")
 
-        max_days = INTERVAL_LIMITS[a.interval]
+        max_days = max(INTERVAL_LIMITS[item] for item in a.interval)
         max_label = _max_lookback_label(max_days)
         dur = input(f"Enter historical range (e.g. 30d, 6mo, 2y), max {max_label} [{max_label}]: ").strip() or max_label
         dur_low = dur.lower()
@@ -108,7 +109,7 @@ def get_args():
             sys.exit(1)
         w = windows[a.window_idx]
         a.ticker = [str(t).strip().upper() for t in tickers]
-        a.interval = str(w.get("interval", "1d")).lower()
+        a.interval = [str(w.get("interval", "1d")).lower()]
         a.years = float(w.get("years", 5))
         return a
 
@@ -119,7 +120,7 @@ def get_args():
         sys.exit(2)
 
     a.ticker = [x.strip().upper() for x in a.ticker]
-    a.interval = a.interval.lower()
+    a.interval = [x.lower() for x in a.interval]
     invalid = _validate_tickers(a.ticker)
     if invalid:
         print(f"Invalid or no data for: {', '.join(invalid)}.")
@@ -130,112 +131,119 @@ args = get_args()
 
 # Normalize interval to lowercase (CLI e.g. --interval 5D -> 5d)
 if args.interval is not None:
-    args.interval = args.interval.lower()
+    args.interval = [x.lower() for x in args.interval]
 
 # ---------- Interval supported range ----------
-if args.interval not in INTERVAL_LIMITS:
-    print(f"Unsupported interval '{args.interval}'. Available: {', '.join(INTERVAL_OPTIONS)}")
-    sys.exit(1)
+for interval in args.interval:
+    if interval not in INTERVAL_LIMITS:
+        print(f"Unsupported interval '{interval}'. Available: {', '.join(INTERVAL_OPTIONS)}")
+        sys.exit(1)
 
-# ---------- Auto-cap lookback days ----------
-max_days = INTERVAL_LIMITS[args.interval]
-max_years = max_days / 365
-desired_days = args.years * 365
-if desired_days >= max_days:
-    # yfinance 對部分 interval 會要求所選時間範圍必須「小於」上限。
-    # 例如 1h 上限是 730 天時，如果剛好取到 730 天會抓不到資料。
-    # 因此當 desired_days >= max_days 時，統一改成 max_days - 1 天。
-    adjusted_days = max(1, max_days - 1)
-    print(
-        f"{args.interval} supports at most {_max_lookback_label(max_days)}; "
-        f"auto-adjust to {adjusted_days}d to avoid yfinance boundary issue."
-    )
-    args.years = adjusted_days / 365
-elif desired_days > max_days:
-    # 保留舊邏輯的保險分支（通常不會走到，因為上面已涵蓋 >=）
-    print(f"{args.interval} supports at most {_max_lookback_label(max_days)}; adjusted.")
-    args.years = max_years
+# ---------- Auto-cap lookback days per interval ----------
+interval_years = []
+for interval in args.interval:
+    max_days = INTERVAL_LIMITS[interval]
+    desired_days = args.years * 365
+    if desired_days >= max_days:
+        adjusted_days = max(1, max_days - 1)
+        print(
+            f"{interval} supports at most {_max_lookback_label(max_days)}; "
+            f"auto-adjust to {adjusted_days}d to avoid yfinance boundary issue."
+        )
+        interval_years.append(adjusted_days / 365)
+    elif desired_days > max_days:
+        print(f"{interval} supports at most {_max_lookback_label(max_days)}; adjusted.")
+        interval_years.append(max_days / 365)
+    else:
+        interval_years.append(args.years)
 
 if args.years <= 0:
-    args.years = (1 / 365) if args.interval.endswith("m") or args.interval == "1h" else 1
+    args.years = (1 / 365) if any(i.endswith("m") or i == "1h" for i in args.interval) else 1
     print("Lookback too small; set to minimum.")
-
-lookback_days = max(1, round(args.years * 365))
-if lookback_days >= max_days:
-    # 再次保險：處理 float + round 造成剛好回到 max_days 的情況
-    lookback_days = max(1, max_days - 1)
-start_date = datetime.date.today() - datetime.timedelta(days=lookback_days)
-# Do not pass end= to yf.download: API treats end as exclusive, so we'd miss today's data
-# Label: days (≤90), months (<1y), or years
-if lookback_days <= 90:
-    lookback_label = f"{lookback_days}d"
-elif lookback_days < 365:
-    lookback_label = f"{round(lookback_days / 30)}mo"
-else:
-    lookback_label = f"{round(lookback_days / 365)}y"
+    interval_years = [args.years] * len(args.interval)
 
 # ---------- Main loop ----------
 for tic in args.ticker:
-    print(f"\nDownloading {tic}, last {lookback_label}, interval {args.interval}…")
-    try:
-        df = yf.download(
-            tic,
-            start=start_date,
-            interval=args.interval,
-            auto_adjust=True,
-            progress=False
-        )
-    except Exception as e:
-        print(f"Download failed for {tic}: {e}")
-        continue
+    for interval, interval_year in zip(args.interval, interval_years):
+        max_days = INTERVAL_LIMITS[interval]
+        lookback_days = max(1, round(interval_year * 365))
+        if lookback_days >= max_days:
+            lookback_days = max(1, max_days - 1)
+        start_date = datetime.date.today() - datetime.timedelta(days=lookback_days)
 
-    if df.empty:
-        print(f"No data for {tic}; skipping.")
-        continue
-
-    # ---------- Reset and flatten columns ----------
-    df = df.reset_index(drop=False)
-    if isinstance(df.columns, pd.MultiIndex):
-        try:
-            df.columns = df.columns.droplevel(1)
-        except (IndexError, KeyError):
-            df.columns = ["_".join(filter(None, map(str, col))).lower() for col in df.columns]
+        if lookback_days <= 90:
+            lookback_label = f"{lookback_days}d"
+        elif lookback_days < 365:
+            lookback_label = f"{round(lookback_days / 30)}mo"
         else:
-            df.columns = [str(c).lower() for c in df.columns]
-    else:
-        df.columns = [str(col).lower() for col in df.columns]
+            lookback_label = f"{round(lookback_days / 365)}y"
 
-    # ---------- Detect time column ----------
-    if "datetime" in df.columns:
-        df.rename(columns={"datetime": "date"}, inplace=True)
+        print(f"\nDownloading {tic}, last {lookback_label}, interval {interval}…")
+        try:
+            # yfinance compares Timedelta(interval); pandas deprecates lowercase 'd' in some paths.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r".*'d' is deprecated.*use 'D' instead of 'd'.*",
+                )
+                df = yf.download(
+                    tic,
+                    start=start_date,
+                    interval=interval,
+                    auto_adjust=True,
+                    progress=False
+                )
+        except Exception as e:
+            print(f"Download failed for {tic} {interval}: {e}")
+            continue
 
-    if "date" not in df.columns:
-        print("No date/datetime column found; skipping.")
-        print("DataFrame columns:", df.columns.tolist())
-        print("Column dtypes:\n", df.dtypes)
-        print("First 5 rows:\n", df.head())
-        continue
+        if df.empty:
+            print(f"No data for {tic} {interval}; skipping.")
+            continue
 
-    # ---------- Normalize OHLCV column names ----------
-    for base in ["open", "high", "low", "close", "volume"]:
-        match = next((c for c in df.columns if c.startswith(base)), None)
-        if match:
-            df.rename(columns={match: base}, inplace=True)
+        # ---------- Reset and flatten columns ----------
+        df = df.reset_index(drop=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            try:
+                df.columns = df.columns.droplevel(1)
+            except (IndexError, KeyError):
+                df.columns = ["_".join(filter(None, map(str, col))).lower() for col in df.columns]
+            else:
+                df.columns = [str(c).lower() for c in df.columns]
+        else:
+            df.columns = [str(col).lower() for col in df.columns]
 
-    # ---------- Required columns check ----------
-    needed = ["date", "open", "high", "low", "close", "volume"]
-    if not set(needed).issubset(df.columns):
-        print(f"Missing columns {set(needed) - set(df.columns)}; skipping.")
-        continue
-    df = df[needed]
+        # ---------- Detect time column ----------
+        if "datetime" in df.columns:
+            df.rename(columns={"datetime": "date"}, inplace=True)
 
-    # ---------- Write CSV ----------
-    fname = f"{tic.upper()}_{lookback_label}_{args.interval}.csv"
-    outpath = str(SAVE_DIR / fname)
-    df.to_csv(outpath, index=False)
-    out_path_obj = Path(outpath).resolve()
-    try:
-        display_path = out_path_obj.relative_to(_PROJECT_ROOT.resolve())
-    except ValueError:
-        display_path = out_path_obj
-    print(f"Saved {display_path}")
+        if "date" not in df.columns:
+            print("No date/datetime column found; skipping.")
+            print("DataFrame columns:", df.columns.tolist())
+            print("Column dtypes:\n", df.dtypes)
+            print("First 5 rows:\n", df.head())
+            continue
+
+        # ---------- Normalize OHLCV column names ----------
+        for base in ["open", "high", "low", "close", "volume"]:
+            match = next((c for c in df.columns if c.startswith(base)), None)
+            if match:
+                df.rename(columns={match: base}, inplace=True)
+
+        # ---------- Required columns check ----------
+        needed = ["date", "open", "high", "low", "close", "volume"]
+        if not set(needed).issubset(df.columns):
+            print(f"Missing columns {set(needed) - set(df.columns)}; skipping.")
+            continue
+        df = df[needed]
+
+        # ---------- Write CSV ----------
+        fname = f"{tic.upper()}_{interval}_{lookback_label}.csv"
+        outpath = str(SAVE_DIR / fname)
+        df.to_csv(outpath, index=False)
+        out_path_obj = Path(outpath).resolve()
+        try:
+            display_path = out_path_obj.relative_to(_PROJECT_ROOT.resolve())
+        except ValueError:
+            display_path = out_path_obj
+        print(f"Saved {display_path}")

@@ -6,6 +6,7 @@ from .discovery import (
     list_protocol_jsons,
     max_lookback_label,
     pick_csv,
+    pick_csvs,
     pick_model,
     pick_protocol,
     rel,

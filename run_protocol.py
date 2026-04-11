@@ -102,7 +102,7 @@ for widx in idxs:
 
     lb = lookback_label(years)
     for tic in tickers:
-        csv_path = SAVE_DIR / f"{tic}_{lb}_{interval}.csv"
+        csv_path = SAVE_DIR / f"{tic}_{interval}_{lb}.csv"
         if not csv_path.exists():
             print(f"[WARN] skip {tic}: csv not found {csv_path}")
             continue
@@ -117,7 +117,7 @@ for widx in idxs:
                 "--ticker",
                 tic,
                 "--save_model",
-                "dir_model.pt",
+                "model.pt",
                 "--window",
                 str(args.window),
                 "--epochs",
@@ -135,7 +135,7 @@ for widx in idxs:
                 "--csv",
                 str(csv_path),
                 "--model",
-                str(MODEL_DIR / tic / "dir_model.pt"),
+                str(MODEL_DIR / tic / "model.pt"),
                 "--protocol",
                 str(protocol_path),
                 "--eval_split",

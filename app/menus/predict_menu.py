@@ -8,7 +8,7 @@ def _print_predict_menu():
     print("=" * 70)
     print("\nPlease select an option:\n")
     print("[Predict]")
-    print("   1. Predict + explanation (pick CSV + model) (predict_stock.py)")
+    print("   1. Predict + explanation (pick one or more CSVs + model; `a`/`all` runs all) (predict_stock.py)")
     print("\n   0. Back")
     print("=" * 70)
 

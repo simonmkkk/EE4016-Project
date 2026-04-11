@@ -2,7 +2,7 @@ from pathlib import Path
 
 from ..paths import PROJECT_ROOT, SAVE_DIR, MODEL_DIR
 from ..state import load_state, save_state
-from ..ui import choose_from_list
+from ..ui import choose_from_list, choose_multiple_from_list
 
 
 def rel(p: Path) -> str:
@@ -48,6 +48,9 @@ def duration_to_years(text: str) -> float | None:
     raw = text.strip().lower()
     if not raw:
         return None
+    # Large lookback so get_stock_data.py can clip each interval to its own yfinance cap.
+    if raw in ("auto", "max", "maximum", "full"):
+        return 100.0
     if raw.endswith("mo") and raw[:-2].strip().replace(".", "", 1).isdigit():
         return float(raw[:-2].strip()) / 12
     if raw.endswith("d") and raw[:-1].strip().replace(".", "", 1).isdigit():
@@ -71,6 +74,28 @@ def pick_csv(*, state_key: str = "last_csv") -> Path | None:
     state[state_key] = chosen
     save_state(state)
     return PROJECT_ROOT / chosen
+
+
+def pick_csvs(
+    *,
+    state_key: str = "last_csvs",
+    header: str | None = None,
+    list_title: str | None = None,
+) -> list[Path] | None:
+    state = load_state()
+    csvs = list_historical_csvs()
+    items = [rel(p) for p in csvs]
+    title = list_title or f"  Select one or more CSVs ({rel(SAVE_DIR)}/*.csv)"
+    chosen_items = choose_multiple_from_list(
+        title,
+        items,
+        header=header,
+    )
+    if not chosen_items:
+        return None
+    state[state_key] = chosen_items[0]
+    save_state(state)
+    return [PROJECT_ROOT / item for item in chosen_items]
 
 
 def pick_model(*, prefer_ticker: str | None = None, state_key: str = "last_model") -> Path | None:

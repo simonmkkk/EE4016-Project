@@ -13,32 +13,25 @@ _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 from app.paths import RESULTS_DIR, SAVE_DIR
+from app.fe import add_technical_indicators
+from app.constants import interval_id_from_csv_stem
 
 import numpy as np
 import pandas as pd
 import torch
 from torch import nn
 from sklearn.metrics import accuracy_score, f1_score
-
 from ta.momentum import RSIIndicator
-from ta.trend import MACD, SMAIndicator
-from ta.volatility import BollingerBands, AverageTrueRange
+from ta.trend import MACD
+from ta.volatility import BollingerBands
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def fe(df: pd.DataFrame):
-    df = df.copy()
-    df["rsi"] = RSIIndicator(df["close"]).rsi()
-    df["macd"] = MACD(df["close"]).macd_diff()
-    df["bbw"] = BollingerBands(df["close"]).bollinger_wband()
-    df["atr"] = AverageTrueRange(df["high"], df["low"], df["close"]).average_true_range()
-    df["vma20"] = SMAIndicator(df["volume"], 20).sma_indicator()
-    df["v_ratio"] = df["volume"] / df["vma20"]
-    df["body"] = (df["open"] - df["close"]).abs()
-    df["range"] = df["high"] - df["low"]
-    df["fwd_ret"] = df["close"].pct_change().shift(-1)
-    return df.dropna().reset_index(drop=True)
+    out = add_technical_indicators(df)
+    out["fwd_ret"] = out["close"].pct_change().shift(-1)
+    return out.dropna().reset_index(drop=True)
 
 
 def build_seq(frame, feats, window):
@@ -77,10 +70,12 @@ ap.add_argument("--protocol", type=str, help="Path to experiment protocol json f
 ap.add_argument("--eval_split", choices=["all", "test"], default="test", help="Evaluate on full data or unseen test split")
 args = ap.parse_args()
 
+LINE_WIDTH = 70
+
 if len(sys.argv) == 1:
     print("\n=== Backtest ‧ Interactive mode ===")
-    csv_in = input(f"CSV path (e.g. {SAVE_DIR.name}/AAPL_2y_1h.csv): ").strip()
-    model_in = input("Model .pt path (e.g. model/AAPL/dir_model.pt): ").strip()
+    csv_in = input(f"CSV path (e.g. {SAVE_DIR.name}/AAPL_1h_2y.csv): ").strip()
+    model_in = input("Model .pt path (e.g. model/AAPL/model.pt): ").strip()
     fee_in = input("fee [0.001]: ").strip() or "0.001"
     split_in = input("eval_split (test/all) [test]: ").strip().lower() or "test"
     protocol_in = input("protocol json path (blank=none): ").strip()
@@ -122,6 +117,33 @@ if not meta_path.exists():
 if not scaler_path.exists():
     raise FileNotFoundError(f"Scaler not found: {scaler_path}")
 
+
+def _write_skip_summary(
+    csv_arg: str,
+    reason: str,
+    detail: dict,
+    *,
+    mp: Path,
+    mtp: Path,
+    scp: Path,
+) -> Path:
+    symbol = Path(csv_arg).stem.split("_")[0].upper()
+    result_dir = RESULTS_DIR / symbol
+    result_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = result_dir / f"{Path(csv_arg).stem}_bt_summary.json"
+    payload = {
+        "status": "skipped",
+        "skip_reason": reason,
+        "detail": detail,
+        "model_path": str(mp),
+        "meta_path": str(mtp),
+        "scaler_path": str(scp),
+    }
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return summary_path
+
+
 with open(meta_path, "r", encoding="utf-8") as f:
     meta = json.load(f)
 with open(scaler_path, "rb") as f:
@@ -145,14 +167,46 @@ df0["granularity"] = (
 df = fe(df0.sort_values("date"))
 
 feats = meta.get("features", [])
+if "interval_id" in feats:
+    df["interval_id"] = np.float32(interval_id_from_csv_stem(Path(args.csv).stem))
+
 missing = [c for c in feats if c not in df.columns]
 if missing:
     raise ValueError(f"Missing features required by metadata: {missing}")
 
-df[feats] = scaler.transform(df[feats]).astype(np.float32)
+scaled_feats = (
+    meta.get("features_scaled")
+    if isinstance(meta.get("features_scaled"), list)
+    else (
+        [c for c in feats if c != "interval_id"]
+        if "interval_id" in feats
+        else list(feats)
+    )
+)
+df[scaled_feats] = scaler.transform(df[scaled_feats]).astype(np.float32)
 X = build_seq(df, feats, args.window)
 if X.shape[0] == 0:
-    raise ValueError(f"Insufficient rows for window={args.window}")
+    print("\n" + "-" * LINE_WIDTH)
+    print("[SKIP] Not enough bars for this model window")
+    print("-" * LINE_WIDTH)
+    print(f"  csv                  : {args.csv}")
+    print(f"  rows_after_fe        : {len(df)}")
+    print(f"  window (effective)   : {args.window}")
+    print(
+        "  hint                 : need len(df) > window after indicators; "
+        "low-frequency CSVs (e.g. 1mo) are often too short vs a large window."
+    )
+    sp = _write_skip_summary(
+        args.csv,
+        "insufficient_rows_after_fe",
+        {"rows_after_fe": len(df), "window": args.window},
+        mp=model_path,
+        mtp=meta_path,
+        scp=scaler_path,
+    )
+    print(f"  skip_summary_path    : {sp.relative_to(_ROOT)}")
+    print("-" * LINE_WIDTH + "\n")
+    raise SystemExit(0)
 
 model = LSTMDir(len(feats), att=bool(meta.get("use_attn", False))).to(DEVICE)
 model.load_state_dict(torch.load(model_path, map_location=DEVICE))
@@ -200,6 +254,30 @@ rsi_vals = rsi_vals[start:]
 bb_high = bb_high[start:]
 bb_low = bb_low[start:]
 close_eval = close_eval[start:]
+if len(fwd_ret) == 0:
+    print("\n" + "-" * LINE_WIDTH)
+    print("[SKIP] No rows in the chosen evaluation split")
+    print("-" * LINE_WIDTH)
+    print(f"  csv                  : {args.csv}")
+    print(f"  eval_split           : {args.eval_split}")
+    print(f"  aligned_bars         : {len(df) - args.window}")
+    print(f"  window               : {args.window}")
+    sp = _write_skip_summary(
+        args.csv,
+        "empty_eval_split",
+        {
+            "eval_split": args.eval_split,
+            "aligned_bars": len(df) - args.window,
+            "window": args.window,
+        },
+        mp=model_path,
+        mtp=meta_path,
+        scp=scaler_path,
+    )
+    print(f"  skip_summary_path    : {sp.relative_to(_ROOT)}")
+    print("-" * LINE_WIDTH + "\n")
+    raise SystemExit(0)
+
 periods_per_year = infer_periods_per_year(Path(args.csv).name)
 
 def strategy_metrics(signals: np.ndarray):
@@ -288,14 +366,20 @@ summary_path = result_dir / f"{Path(args.csv).stem}_bt_summary.json"
 with open(summary_path, "w", encoding="utf-8") as f:
     json.dump(summary, f, ensure_ascii=False, indent=2)
 
-print(f"[OK] backtest saved to {out_path}")
-print(f"[OK] summary saved to {summary_path}")
-print(
-    f"[BT] model_return={summary['strategies']['model_lstm']['total_return']:.4f} "
-    f"model_acc={summary['predictive_metrics_model']['accuracy']:.4f} "
-    f"model_f1={summary['predictive_metrics_model']['f1']:.4f} "
-    f"bh_return={summary['strategies']['buy_and_hold']['total_return']:.4f} "
-    f"macd_return={summary['strategies']['macd']['total_return']:.4f} "
-    f"rsi_return={summary['strategies']['rsi']['total_return']:.4f} "
-    f"bb_return={summary['strategies']['bollinger']['total_return']:.4f}"
-)
+print("\n" + "-" * LINE_WIDTH)
+print("BACKTEST OUTPUT")
+print("-" * LINE_WIDTH)
+print(f"  backtest_output_csv_path            : {out_path.relative_to(_ROOT)}")
+print(f"  backtest_summary_json_path          : {summary_path.relative_to(_ROOT)}")
+
+print("\n" + "-" * LINE_WIDTH)
+print("BACKTEST METRICS")
+print("-" * LINE_WIDTH)
+print(f"  model_lstm_total_return             : {summary['strategies']['model_lstm']['total_return']:.4f}")
+print(f"  model_direction_accuracy            : {summary['predictive_metrics_model']['accuracy']:.4f}")
+print(f"  model_direction_f1_score            : {summary['predictive_metrics_model']['f1']:.4f}")
+print(f"  buy_and_hold_total_return           : {summary['strategies']['buy_and_hold']['total_return']:.4f}")
+print(f"  macd_strategy_total_return          : {summary['strategies']['macd']['total_return']:.4f}")
+print(f"  rsi_strategy_total_return           : {summary['strategies']['rsi']['total_return']:.4f}")
+print(f"  bollinger_band_strategy_total_return: {summary['strategies']['bollinger']['total_return']:.4f}")
+print("-" * LINE_WIDTH)

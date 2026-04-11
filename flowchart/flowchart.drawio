@@ -1,5 +1,5 @@
 <mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/28.0.6 Chrome/138.0.7204.100 Electron/37.2.3 Safari/537.36" version="28.0.6">
-  <diagram name="第1頁" id="OCaccBBR35c_kTHBOoiC">
+  <diagram name="Page 1" id="OCaccBBR35c_kTHBOoiC">
     <mxGraphModel dx="2133" dy="1231" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
       <root>
         <mxCell id="0" />
@@ -7,10 +7,10 @@
         <mxCell id="HbroQFQRi42q7FmsvMeN-2" value="" style="shape=terminator;whiteSpace=wrap;html=1;rounded=1;shadow=0;fontFamily=Helvetica;fontSize=12;labelBackgroundColor=none;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;" vertex="1" parent="1">
           <mxGeometry x="-100" y="110" width="250" height="110" as="geometry" />
         </mxCell>
-        <mxCell id="HbroQFQRi42q7FmsvMeN-3" value="&lt;b style=&quot;&quot;&gt;&lt;font style=&quot;font-size: 25px;&quot;&gt;實驗設定&lt;/font&gt;&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+        <mxCell id="HbroQFQRi42q7FmsvMeN-3" value="&lt;b style=&quot;&quot;&gt;&lt;font style=&quot;font-size: 25px;&quot;&gt;Experiment config&lt;/font&gt;&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
           <mxGeometry x="-45" y="120" width="140" height="29.11" as="geometry" />
         </mxCell>
-        <mxCell id="HbroQFQRi42q7FmsvMeN-4" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;experiement_protocol.json&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+        <mxCell id="HbroQFQRi42q7FmsvMeN-4" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;experiment_protocol.json&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
           <mxGeometry x="-90" y="160" width="230" height="40" as="geometry" />
         </mxCell>
         <mxCell id="HbroQFQRi42q7FmsvMeN-5" value="" style="endArrow=none;html=1;rounded=0;entryX=0.001;entryY=0.368;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1">
@@ -39,7 +39,7 @@
         <mxCell id="HbroQFQRi42q7FmsvMeN-6" value="" style="shape=terminator;whiteSpace=wrap;html=1;rounded=1;shadow=0;fontFamily=Helvetica;fontSize=12;labelBackgroundColor=none;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;" vertex="1" parent="1">
           <mxGeometry x="268" y="110" width="160" height="110" as="geometry" />
         </mxCell>
-        <mxCell id="HbroQFQRi42q7FmsvMeN-7" value="&lt;b style=&quot;&quot;&gt;&lt;font style=&quot;font-size: 25px;&quot;&gt;協調器&lt;/font&gt;&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+        <mxCell id="HbroQFQRi42q7FmsvMeN-7" value="&lt;b style=&quot;&quot;&gt;&lt;font style=&quot;font-size: 25px;&quot;&gt;Orchestrator&lt;/font&gt;&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
           <mxGeometry x="275.5" y="120" width="140" height="29.11" as="geometry" />
         </mxCell>
         <mxCell id="HbroQFQRi42q7FmsvMeN-8" value="&lt;span style=&quot;font-size: 20px;&quot;&gt;run_protocol.py&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
@@ -60,7 +60,7 @@
         <mxCell id="HbroQFQRi42q7FmsvMeN-12" value="" style="shape=terminator;whiteSpace=wrap;html=1;rounded=1;shadow=0;fontFamily=Helvetica;fontSize=12;labelBackgroundColor=none;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;" vertex="1" parent="1">
           <mxGeometry x="560" y="110" width="193" height="110" as="geometry" />
         </mxCell>
-        <mxCell id="HbroQFQRi42q7FmsvMeN-13" value="&lt;span style=&quot;font-size: 25px;&quot;&gt;&lt;b&gt;下載資料&lt;/b&gt;&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+        <mxCell id="HbroQFQRi42q7FmsvMeN-13" value="&lt;span style=&quot;font-size: 25px;&quot;&gt;&lt;b&gt;Download data&lt;/b&gt;&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
           <mxGeometry x="588" y="120" width="140" height="29.11" as="geometry" />
         </mxCell>
         <mxCell id="HbroQFQRi42q7FmsvMeN-14" value="&lt;span style=&quot;font-size: 20px;&quot;&gt;get_stock_data.py&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
@@ -78,7 +78,7 @@
         <mxCell id="HbroQFQRi42q7FmsvMeN-17" value="&lt;b style=&quot;&quot;&gt;&lt;font style=&quot;font-size: 25px;&quot;&gt;record/&lt;/font&gt;&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
           <mxGeometry x="1242" y="120" width="140" height="29.11" as="geometry" />
         </mxCell>
-        <mxCell id="HbroQFQRi42q7FmsvMeN-18" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;OHLCV CSV（原始資料）&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+        <mxCell id="HbroQFQRi42q7FmsvMeN-18" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;OHLCV CSV (raw bars)&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
           <mxGeometry x="1197" y="160" width="230" height="40" as="geometry" />
         </mxCell>
         <mxCell id="HbroQFQRi42q7FmsvMeN-44" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=5;" edge="1" parent="1" source="HbroQFQRi42q7FmsvMeN-23" target="HbroQFQRi42q7FmsvMeN-30">
@@ -90,7 +90,7 @@
         <mxCell id="HbroQFQRi42q7FmsvMeN-23" value="" style="shape=terminator;whiteSpace=wrap;html=1;rounded=1;shadow=0;fontFamily=Helvetica;fontSize=12;labelBackgroundColor=none;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;" vertex="1" parent="1">
           <mxGeometry x="562" y="290" width="193" height="110" as="geometry" />
         </mxCell>
-        <mxCell id="HbroQFQRi42q7FmsvMeN-24" value="&lt;span style=&quot;font-size: 25px;&quot;&gt;&lt;b&gt;訓練模型&lt;/b&gt;&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+        <mxCell id="HbroQFQRi42q7FmsvMeN-24" value="&lt;span style=&quot;font-size: 25px;&quot;&gt;&lt;b&gt;Train model&lt;/b&gt;&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
           <mxGeometry x="590" y="300" width="140" height="29.11" as="geometry" />
         </mxCell>
         <mxCell id="HbroQFQRi42q7FmsvMeN-25" value="&lt;span style=&quot;font-size: 20px;&quot;&gt;train_stock.py&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
@@ -120,7 +120,7 @@
         <mxCell id="HbroQFQRi42q7FmsvMeN-30" value="" style="shape=terminator;whiteSpace=wrap;html=1;rounded=1;shadow=0;fontFamily=Helvetica;fontSize=12;labelBackgroundColor=none;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;" vertex="1" parent="1">
           <mxGeometry x="561.5" y="487" width="193" height="110" as="geometry" />
         </mxCell>
-        <mxCell id="HbroQFQRi42q7FmsvMeN-31" value="&lt;span style=&quot;font-size: 25px;&quot;&gt;&lt;b&gt;回測與基準比較&lt;/b&gt;&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+        <mxCell id="HbroQFQRi42q7FmsvMeN-31" value="&lt;span style=&quot;font-size: 25px;&quot;&gt;&lt;b&gt;Backtest vs baselines&lt;/b&gt;&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
           <mxGeometry x="569.25" y="497" width="180.5" height="29.11" as="geometry" />
         </mxCell>
         <mxCell id="HbroQFQRi42q7FmsvMeN-32" value="&lt;span style=&quot;font-size: 20px;&quot;&gt;backtest_stock.py&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
@@ -135,10 +135,10 @@
         <mxCell id="HbroQFQRi42q7FmsvMeN-34" value="" style="shape=terminator;whiteSpace=wrap;html=1;rounded=1;shadow=0;fontFamily=Helvetica;fontSize=12;labelBackgroundColor=none;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;" vertex="1" parent="1">
           <mxGeometry x="899" y="391" width="193" height="110" as="geometry" />
         </mxCell>
-        <mxCell id="HbroQFQRi42q7FmsvMeN-35" value="&lt;span style=&quot;font-size: 25px;&quot;&gt;&lt;b&gt;單獨推論與解釋&lt;/b&gt;&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+        <mxCell id="HbroQFQRi42q7FmsvMeN-35" value="&lt;span style=&quot;font-size: 25px;&quot;&gt;&lt;b&gt;Standalone predict + explain&lt;/b&gt;&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
           <mxGeometry x="906.75" y="401" width="180.5" height="29.11" as="geometry" />
         </mxCell>
-        <mxCell id="HbroQFQRi42q7FmsvMeN-36" value="&lt;span style=&quot;font-size: 20px;&quot;&gt;predict_stock.py&lt;br&gt;(可選)&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+        <mxCell id="HbroQFQRi42q7FmsvMeN-36" value="&lt;span style=&quot;font-size: 20px;&quot;&gt;predict_stock.py&lt;br&gt;(optional)&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
           <mxGeometry x="910.5" y="447" width="173" height="40" as="geometry" />
         </mxCell>
         <mxCell id="HbroQFQRi42q7FmsvMeN-37" value="" style="endArrow=none;html=1;rounded=0;entryX=0;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" target="HbroQFQRi42q7FmsvMeN-35">
@@ -153,13 +153,13 @@
         <mxCell id="HbroQFQRi42q7FmsvMeN-39" value="&lt;b style=&quot;&quot;&gt;&lt;font style=&quot;font-size: 25px;&quot;&gt;result/&lt;/font&gt;&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
           <mxGeometry x="1242" y="487.44000000000005" width="140" height="29.11" as="geometry" />
         </mxCell>
-        <mxCell id="HbroQFQRi42q7FmsvMeN-40" value="&lt;span style=&quot;font-size: 20px;&quot;&gt;回測明細CSV + *_bt_summary.json + comparison_summary.csv&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+        <mxCell id="HbroQFQRi42q7FmsvMeN-40" value="&lt;span style=&quot;font-size: 20px;&quot;&gt;Backtest detail CSVs + *_bt_summary.json + comparison_summary.csv&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
           <mxGeometry x="1197" y="527" width="230" height="66" as="geometry" />
         </mxCell>
-        <mxCell id="HbroQFQRi42q7FmsvMeN-49" value="&lt;font style=&quot;font-size: 21px;&quot;&gt;模型策略 (LSTM 機率=&amp;gt;threshold訊號)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+        <mxCell id="HbroQFQRi42q7FmsvMeN-49" value="&lt;font style=&quot;font-size: 21px;&quot;&gt;Model strategy (LSTM prob =&amp;gt; threshold signal)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
           <mxGeometry x="463" y="610" width="412" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="HbroQFQRi42q7FmsvMeN-50" value="&lt;font style=&quot;font-size: 21px;&quot;&gt;基準策略 (Buy&amp;amp;Hold/MACD/RSI/Bollinger)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+        <mxCell id="HbroQFQRi42q7FmsvMeN-50" value="&lt;font style=&quot;font-size: 21px;&quot;&gt;Baseline strategies (Buy&amp;amp;Hold/MACD/RSI/Bollinger)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
           <mxGeometry x="462" y="676" width="412.5" height="60" as="geometry" />
         </mxCell>
         <mxCell id="HbroQFQRi42q7FmsvMeN-53" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=-0.002;entryY=0.687;entryDx=0;entryDy=0;entryPerimeter=0;strokeWidth=5;" edge="1" parent="1" source="HbroQFQRi42q7FmsvMeN-30" target="HbroQFQRi42q7FmsvMeN-27">

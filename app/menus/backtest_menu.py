@@ -8,7 +8,7 @@ def _print_backtest_menu():
     print("=" * 70)
     print("\nPlease select an option:\n")
     print("[Backtest]")
-    print("   1. Backtest (pick CSV + model) (backtest_stock.py)")
+    print("   1. Backtest (pick one or more CSVs + model) (backtest_stock.py)")
     print("\n   0. Back")
     print("=" * 70)
 
