@@ -200,9 +200,11 @@ if X.shape[0] == 0:
 
 num_int = meta.get("num_interval_embeddings")
 embed_dim = int(meta.get("interval_embed_dim", 8))
+num_layers = int(meta.get("num_layers", 1))
 model = LSTMDir(
     len(feats_lstm),
     att=bool(meta.get("use_attn", False)),
+    num_layers=num_layers,
     num_intervals=(int(num_int) if use_interval_embedding and num_int is not None else None),
     embed_dim=embed_dim,
 ).to(DEVICE)

@@ -7,6 +7,9 @@ from torch import nn
 
 class LSTMDir(nn.Module):
     """
+    Stacked single-layer LSTMs with residual connections: each layer after the first
+    adds its input sequence to its output (same shape (B, T, hid)).
+
     If num_intervals is set, `interval_id` is embedded and concatenated to the LSTM
     pooled vector; the LSTM input should NOT include the raw interval_id column.
     Legacy checkpoints use num_intervals=None and pass all features (including float interval_id) in x.
@@ -18,13 +21,18 @@ class LSTMDir(nn.Module):
         hid: int = 128,
         att: bool = False,
         *,
+        num_layers: int = 3,
         num_intervals: int | None = None,
         embed_dim: int = 8,
     ):
         super().__init__()
         self.att = att
         self.num_intervals = num_intervals
-        self.lstm = nn.LSTM(d_in, hid, batch_first=True)
+        nl = max(1, int(num_layers))
+        self.lstm_stack = nn.ModuleList()
+        self.lstm_stack.append(nn.LSTM(d_in, hid, num_layers=1, batch_first=True))
+        for _ in range(1, nl):
+            self.lstm_stack.append(nn.LSTM(hid, hid, num_layers=1, batch_first=True))
         if att:
             self.w = nn.Linear(hid, 1, bias=False)
         self.interval_emb: nn.Embedding | None
@@ -36,7 +44,13 @@ class LSTMDir(nn.Module):
             self.fc = nn.Linear(hid, 1)
 
     def forward(self, x: torch.Tensor, interval_id: torch.Tensor | None = None) -> torch.Tensor:
-        o, _ = self.lstm(x)
+        h = x
+        for i, layer in enumerate(self.lstm_stack):
+            out, _ = layer(h)
+            if i > 0:
+                out = out + h
+            h = out
+        o = h
         if self.att:
             a = torch.softmax(self.w(o), dim=1)
             o = (a * o).sum(1)

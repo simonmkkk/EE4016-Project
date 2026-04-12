@@ -4,6 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import torch
+from torch import nn
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
 
@@ -16,6 +17,7 @@ def build_seq(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """Training-style sequences: label at index i uses rows [i-window, i)."""
     v = frame[feats_lstm].values.astype(np.float32)
+    d = frame["direction"].values.astype(np.float32)
     X, y, iv = [], [], []
     for i in range(window, len(frame)):
         X.append(v[i - window : i])
@@ -102,6 +104,33 @@ def build_seq_x_only(
             iv_next = np.array([int(frame["interval_id"].iloc[-1])], dtype=np.int64)
 
     return Xa, iva, x_next, iv_next
+
+
+def val_probs_for_threshold_search(
+    model: nn.Module,
+    frames: list[pd.DataFrame],
+    feats_lstm: list[str],
+    window: int,
+    device: torch.device,
+    *,
+    use_interval_embedding: bool,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Return (probs, y_true) on validation frames for threshold grid search."""
+    X_eval, y_eval, iv_eval = build_seq_multi(
+        frames, feats_lstm, window, use_interval_embedding=use_interval_embedding
+    )
+    if X_eval.shape[0] == 0:
+        return None
+    model.eval()
+    x_t = torch.tensor(X_eval).to(device)
+    with torch.no_grad():
+        if iv_eval is not None:
+            logits = model(x_t, torch.tensor(iv_eval).to(device))
+        else:
+            logits = model(x_t)
+        probs = torch.sigmoid(logits).cpu().numpy().reshape(-1)
+    y_true = y_eval.reshape(-1).astype(int)
+    return probs, y_true
 
 
 def evaluate_split(

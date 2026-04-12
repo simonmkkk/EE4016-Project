@@ -5,9 +5,10 @@ train_stock.py -- training only.
 
 Example:
   python train_stock.py \\
-      --csvs AAPL_1d_10y.csv AAPL_1m_6d.csv \\
-      --save_model model.pt \\
-      --window 30 --epochs 40 --use_attn
+      --csvs historical_data/AAPL_1d_10y.csv \\
+      --ticker AAPL --save_model model.pt \\
+      --window 30 --epochs 40 --use_attn \\
+      --eval_threshold 0.4
 """
 import os, glob, sys, math, argparse, json, pickle, random, hashlib, subprocess
 from pathlib import Path
@@ -19,12 +20,13 @@ from app.paths import MODEL_DIR
 from app.fe import add_technical_indicators
 from app.constants import INTERVAL_ID_ORDER, INTERVAL_ID_UNKNOWN, interval_id_from_csv_stem
 from app.model import LSTMDir, lstm_feature_columns
-from app.sequences import build_seq_multi, evaluate_split
+from app.sequences import build_seq_multi, evaluate_split, val_probs_for_threshold_search
 import numpy as np
 import pandas as pd
 import torch
 from torch import nn
 import sklearn
+from sklearn.metrics import f1_score
 from sklearn.preprocessing import StandardScaler
 # --- Device ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -54,7 +56,38 @@ ap.add_argument("--use_attn", action="store_true")
 ap.add_argument("--seed", type=int, default=42)
 ap.add_argument("--train_ratio", type=float, default=0.7)
 ap.add_argument("--val_ratio", type=float, default=0.15)
-ap.add_argument("--eval_threshold", type=float, default=0.5)
+ap.add_argument(
+    "--eval_threshold",
+    type=float,
+    default=0.4,
+    help="Base decision threshold; also grid fallback when val search is disabled",
+)
+thr_grp = ap.add_mutually_exclusive_group()
+thr_grp.add_argument(
+    "--val-threshold-search",
+    dest="val_threshold_search",
+    action="store_true",
+    help="Pick threshold on val to maximize F1 (default)",
+)
+thr_grp.add_argument(
+    "--no-val-threshold-search",
+    dest="val_threshold_search",
+    action="store_false",
+    help="Use fixed --eval_threshold for val/test metrics",
+)
+ap.set_defaults(val_threshold_search=True)
+ap.add_argument(
+    "--num_layers",
+    type=int,
+    default=3,
+    help="Number of LSTM layers (residual between layer 2..N)",
+)
+ap.add_argument(
+    "--lr_schedule_patience",
+    type=int,
+    default=5,
+    help="ReduceLROnPlateau patience (epochs without val loss improvement)",
+)
 ap.add_argument("--walk_forward_folds", type=int, default=0, help="Optional rolling evaluation folds on test split")
 ap.add_argument("--protocol", type=str, help="Path to experiment protocol json")
 
@@ -101,6 +134,8 @@ if not (0 < args.train_ratio < 1 and 0 < args.val_ratio < 1 and args.train_ratio
     sys.exit("[ERROR] train_ratio and val_ratio must be in (0,1), and train_ratio + val_ratio < 1")
 if not (0 < args.eval_threshold < 1):
     sys.exit("[ERROR] eval_threshold must be in (0,1)")
+if args.num_layers < 1:
+    sys.exit("[ERROR] num_layers must be >= 1")
 if args.walk_forward_folds < 0:
     sys.exit("[ERROR] walk_forward_folds must be >= 0")
 
@@ -255,6 +290,10 @@ def print_training_header(symbol, csv_list, save_path, args):
             ("lr", str(args.lr)),
             ("patience", str(args.patience)),
             ("use_attn", str(args.use_attn)),
+            ("num_layers", str(args.num_layers)),
+            ("eval_threshold (base)", str(args.eval_threshold)),
+            ("val_threshold_search", str(args.val_threshold_search)),
+            ("lr_sched_patience", str(args.lr_schedule_patience)),
             ("split ratios", f"train={args.train_ratio:.2f} val={args.val_ratio:.2f} test={test_ratio:.2f}"),
         ],
         border="=",
@@ -381,13 +420,17 @@ dl = torch.utils.data.DataLoader(ds, args.batch, shuffle=True, generator=dl_gen)
 model = LSTMDir(
     len(FEATS_LSTM),
     att=args.use_attn,
+    num_layers=args.num_layers,
     num_intervals=(NUM_INTERVAL_EMBEDDINGS if USE_INTERVAL_EMBEDDING else None),
     embed_dim=INTERVAL_EMBED_DIM,
 ).to(DEVICE)
 pos_ratio = y.mean(); neg_ratio = 1 - pos_ratio
 safe_pos = max(float(pos_ratio), 1e-6)
 crit = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([neg_ratio/safe_pos]).to(DEVICE))
-opt  = torch.optim.Adam(model.parameters(), args.lr)
+opt = torch.optim.Adam(model.parameters(), args.lr)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    opt, mode="min", factor=0.5, patience=args.lr_schedule_patience
+)
 val_xb = torch.tensor(X_val).to(DEVICE)
 val_yb = torch.tensor(y_val).to(DEVICE)
 val_ivb = torch.tensor(iv_val).to(DEVICE) if iv_val is not None else None
@@ -421,6 +464,8 @@ for ep in range(args.epochs):
         torch.save(model.state_dict(), save_path)
     else:
         wait += 1
+
+    scheduler.step(avg_val)
 
     epoch_history.append(
         {
@@ -457,17 +502,48 @@ with open(scaler_path, "wb") as f:
 best_model = LSTMDir(
     len(FEATS_LSTM),
     att=args.use_attn,
+    num_layers=args.num_layers,
     num_intervals=(NUM_INTERVAL_EMBEDDINGS if USE_INTERVAL_EMBEDDING else None),
     embed_dim=INTERVAL_EMBED_DIM,
 ).to(DEVICE)
 best_model.load_state_dict(torch.load(save_path, map_location=DEVICE, weights_only=True))
+
+effective_thr = float(args.eval_threshold)
+threshold_search_info: dict | None = None
+if args.val_threshold_search:
+    cand = val_probs_for_threshold_search(
+        best_model,
+        val_frames,
+        FEATS_LSTM,
+        args.window,
+        DEVICE,
+        use_interval_embedding=USE_INTERVAL_EMBEDDING,
+    )
+    if cand is not None:
+        probs_v, y_v = cand
+        best_t, best_f1 = float(args.eval_threshold), -1.0
+        for t in np.arange(0.30, 0.62, 0.02):
+            f1 = f1_score(y_v, (probs_v > t).astype(int), zero_division=0)
+            if f1 > best_f1:
+                best_f1, best_t = f1, float(t)
+        effective_thr = best_t
+        threshold_search_info = {"best_threshold": best_t, "best_val_f1": best_f1, "grid": "0.30:0.02:0.60"}
+        print(
+            f"[INFO] Val F1-optimal threshold: {effective_thr:.4f} "
+            f"(F1={best_f1:.4f}; base --eval_threshold was {args.eval_threshold:.4f})"
+        )
+    else:
+        print("[WARN] Val set empty for threshold search; using --eval_threshold for metrics.")
+else:
+    print(f"[INFO] Fixed eval threshold (no search): {effective_thr:.4f}")
+
 val_metrics = evaluate_split(
     best_model,
     val_frames,
     FEATS_LSTM,
     args.window,
     DEVICE,
-    args.eval_threshold,
+    effective_thr,
     use_interval_embedding=USE_INTERVAL_EMBEDDING,
 )
 test_metrics = evaluate_split(
@@ -476,7 +552,7 @@ test_metrics = evaluate_split(
     FEATS_LSTM,
     args.window,
     DEVICE,
-    args.eval_threshold,
+    effective_thr,
     use_interval_embedding=USE_INTERVAL_EMBEDDING,
 )
 wf_metrics = walk_forward_metrics(
@@ -485,7 +561,7 @@ wf_metrics = walk_forward_metrics(
     FEATS_LSTM,
     args.window,
     DEVICE,
-    args.eval_threshold,
+    effective_thr,
     args.walk_forward_folds,
     use_interval_embedding=USE_INTERVAL_EMBEDDING,
 )
@@ -497,7 +573,12 @@ if wf_metrics:
 meta = {
     "seed": args.seed,
     "window": args.window,
-    "eval_threshold": args.eval_threshold,
+    "eval_threshold": effective_thr,
+    "eval_threshold_base": args.eval_threshold,
+    "val_threshold_search": args.val_threshold_search,
+    "threshold_search": threshold_search_info,
+    "num_layers": args.num_layers,
+    "lr_schedule_patience": args.lr_schedule_patience,
     "walk_forward_folds": args.walk_forward_folds,
     "features": FEATS,
     "feats_lstm": FEATS_LSTM,

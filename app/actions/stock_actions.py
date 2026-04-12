@@ -120,7 +120,7 @@ def run_train_from_historical_csv() -> bool:
         _print_list("Selected CSVs:", selected_csvs)
         print(f"  Selected ticker  : {tic}")
 
-        epochs = ask("epochs", "5")
+        epochs = ask("epochs", "100")
         print(f"  Selected epochs  : {epochs}")
 
         window = ask("window", "30")
