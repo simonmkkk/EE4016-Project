@@ -79,7 +79,7 @@ ap.set_defaults(val_threshold_search=True)
 ap.add_argument(
     "--num_layers",
     type=int,
-    default=3,
+    default=2,
     help="Number of LSTM layers (residual between layer 2..N)",
 )
 ap.add_argument(
@@ -261,17 +261,29 @@ def print_eval_section(val_metrics, test_metrics, window: int):
             f"{metrics['threshold']:>8.2f}"
         )
 
+    def _print_conf(name: str, metrics):
+        if metrics is None or "tn" not in metrics:
+            return
+        m = metrics
+        print(
+            f"  {name:<6}"
+            f"  TN={m['tn']} FP={m['fp']} FN={m['fn']} TP={m['tp']}  "
+            f"P(pred=1)={m['pred_positive_rate']:.4f}"
+        )
+
     if val_metrics is None:
         print(f"  {'VAL':<6}{'N/A':>8}{'-':>10}{'-':>10}{'-':>10}{'-':>10}{'-':>8}")
         print(f"  [WARN] val rows are insufficient for window={window}")
     else:
         _print_row("VAL", val_metrics)
+        _print_conf("VAL", val_metrics)
 
     if test_metrics is None:
         print(f"  {'TEST':<6}{'N/A':>8}{'-':>10}{'-':>10}{'-':>10}{'-':>10}{'-':>8}")
         print(f"  [WARN] test rows are insufficient for window={window}")
     else:
         _print_row("TEST", test_metrics)
+        _print_conf("TEST", test_metrics)
 
     print("=" * LINE_WIDTH)
 
@@ -521,15 +533,72 @@ if args.val_threshold_search:
     )
     if cand is not None:
         probs_v, y_v = cand
+        y_rate = float(np.mean(y_v))
+        lo, hi = float(np.min(probs_v)), float(np.max(probs_v))
+        # Uniform grid + percentiles + linspace(min,max) so candidates exist between actual probs
+        thr_uniform = np.arange(0.02, 0.991, 0.02)
+        thr_pct = np.percentile(probs_v, np.arange(3, 100, 2))
+        _parts = [thr_uniform, thr_pct]
+        if hi > lo + 1e-12:
+            _parts.append(
+                np.linspace(lo, hi, num=min(64, max(8, int(len(probs_v) * 2))))
+            )
+        cand_ts = np.unique(np.clip(np.concatenate(_parts), 1e-9, 1.0 - 1e-9))
+
+        def _prevalence_threshold(rate: float) -> float:
+            """t with ~`rate` fraction of probs > t (continuous-ish probs)."""
+            rate = float(np.clip(rate, 1e-6, 1.0 - 1e-6))
+            return float(np.quantile(probs_v, 1.0 - rate))
+
         best_t, best_f1 = float(args.eval_threshold), -1.0
-        for t in np.arange(0.30, 0.62, 0.02):
-            f1 = f1_score(y_v, (probs_v > t).astype(int), zero_division=0)
-            if f1 > best_f1:
-                best_f1, best_t = f1, float(t)
+        best_balance = -1.0
+        found_mixed = False
+        for t in cand_ts:
+            y_p = (probs_v > t).astype(int)
+            pr = float(np.mean(y_p))
+            if pr <= 0.0 or pr >= 1.0:
+                continue
+            found_mixed = True
+            f1 = f1_score(y_v, y_p, zero_division=0)
+            balance = -abs(pr - y_rate)
+            if f1 > best_f1 + 1e-12 or (
+                abs(f1 - best_f1) <= 1e-12 and balance > best_balance
+            ):
+                best_f1, best_t, best_balance = f1, float(t), balance
+
+        search_mode = "f1_mixed"
+        if not found_mixed:
+            # Every t in grid yields all-0 or all-1 (e.g. nearly constant logits). Match label rate.
+            best_t = _prevalence_threshold(y_rate)
+            y_p = (probs_v > best_t).astype(int)
+            pr_fb = float(np.mean(y_p))
+            if pr_fb <= 0.0 or pr_fb >= 1.0:
+                # Constant probs: no t can match prevalence; use CLI default
+                best_t = float(args.eval_threshold)
+                y_p = (probs_v > best_t).astype(int)
+                search_mode = "eval_threshold_fallback"
+                print(
+                    "[WARN] Val probs ~ constant; cannot split by threshold. "
+                    f"Using --eval_threshold={best_t:.4f}."
+                )
+            else:
+                search_mode = "prevalence_quantile_fallback"
+                print(
+                    "[WARN] No mixed predictions on coarse grid; using prevalence-matched "
+                    f"quantile t={best_t:.4f} (val pos rate={y_rate:.4f})."
+                )
+            best_f1 = float(f1_score(y_v, y_p, zero_division=0))
         effective_thr = best_t
-        threshold_search_info = {"best_threshold": best_t, "best_val_f1": best_f1, "grid": "0.30:0.02:0.60"}
+        threshold_search_info = {
+            "best_threshold": best_t,
+            "best_val_f1": best_f1,
+            "search_mode": search_mode,
+            "prob_min": lo,
+            "prob_max": hi,
+            "candidates_note": "uniform + percentiles + linspace(min_prob,max_prob); skip all-0/all-1",
+        }
         print(
-            f"[INFO] Val F1-optimal threshold: {effective_thr:.4f} "
+            f"[INFO] Val threshold ({search_mode}): {effective_thr:.4f} "
             f"(F1={best_f1:.4f}; base --eval_threshold was {args.eval_threshold:.4f})"
         )
     else:

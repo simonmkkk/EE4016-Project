@@ -9,6 +9,8 @@ class LSTMDir(nn.Module):
     """
     Stacked single-layer LSTMs with residual connections: each layer after the first
     adds its input sequence to its output (same shape (B, T, hid)).
+    Dropout (p=0.3) is applied to the pooled LSTM vector before `fc` (and before
+    concatenating interval embeddings when used).
 
     If num_intervals is set, `interval_id` is embedded and concatenated to the LSTM
     pooled vector; the LSTM input should NOT include the raw interval_id column.
@@ -21,7 +23,7 @@ class LSTMDir(nn.Module):
         hid: int = 128,
         att: bool = False,
         *,
-        num_layers: int = 3,
+        num_layers: int = 2,
         num_intervals: int | None = None,
         embed_dim: int = 8,
     ):
@@ -35,6 +37,7 @@ class LSTMDir(nn.Module):
             self.lstm_stack.append(nn.LSTM(hid, hid, num_layers=1, batch_first=True))
         if att:
             self.w = nn.Linear(hid, 1, bias=False)
+        self.dropout = nn.Dropout(p=0.3)
         self.interval_emb: nn.Embedding | None
         if num_intervals is not None:
             self.interval_emb = nn.Embedding(num_intervals, embed_dim)
@@ -56,6 +59,7 @@ class LSTMDir(nn.Module):
             o = (a * o).sum(1)
         else:
             o = o[:, -1]
+        o = self.dropout(o)
         if self.interval_emb is not None:
             if interval_id is None:
                 raise ValueError("interval_id is required when num_intervals is set")
