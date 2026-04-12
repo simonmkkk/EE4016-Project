@@ -227,6 +227,12 @@ uv sync
 
 這會建立 `.venv` 並安裝相依套件。
 
+### PyTorch：CUDA 12.4 與 CPU
+
+`pyproject.toml` 預設使用 `torch==2.6.0+cu124` 與 `torchvision==0.21.0+cu124`，並透過 `tool.uv.sources` 指向 PyTorch 的 **CUDA 12.4** wheel 索引。請在已安裝相容 NVIDIA 驅動與 CUDA 執行環境的機器上使用；若教授的環境沒有對應 CUDA 或無法連到該索引，`uv sync` 可能失敗。
+
+若只需要 **CPU**，請改為依 [PyTorch 官方安裝頁](https://pytorch.org/get-started/locally/) 選擇 CPU 版 wheel，並相應調整 `pyproject.toml` 中的 `torch` / `torchvision` 版本與 `[[tool.uv.index]]`（或暫時移除 `+cu124` 與 `tool.uv.sources` 中的 pytorch 索引），再執行 `uv sync`。重新訓練後產生的 `model.pt` 與 CPU/GPU 無關，可在另一種裝置上推論（仍須 Python 相依一致）。
+
 ---
 
 ## 2) 先設定 `.env`（第一次執行必做）

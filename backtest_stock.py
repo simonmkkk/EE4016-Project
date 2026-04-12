@@ -15,11 +15,12 @@ if str(_ROOT) not in sys.path:
 from app.paths import RESULTS_DIR, SAVE_DIR
 from app.fe import add_technical_indicators
 from app.constants import interval_id_from_csv_stem
+from app.model import LSTMDir, lstm_feature_columns
+from app.sequences import build_seq_x_only
 
 import numpy as np
 import pandas as pd
 import torch
-from torch import nn
 from sklearn.metrics import accuracy_score, f1_score
 from ta.momentum import RSIIndicator
 from ta.trend import MACD
@@ -32,29 +33,6 @@ def fe(df: pd.DataFrame):
     out = add_technical_indicators(df)
     out["fwd_ret"] = out["close"].pct_change().shift(-1)
     return out.dropna().reset_index(drop=True)
-
-
-def build_seq(frame, feats, window):
-    X = []
-    v = frame[feats].values.astype(np.float32)
-    for i in range(window, len(frame)):
-        X.append(v[i - window : i])
-    return np.array(X)
-
-
-class LSTMDir(nn.Module):
-    def __init__(self, d_in: int, hid: int = 128, att: bool = False):
-        super().__init__()
-        self.att = att
-        self.lstm = nn.LSTM(d_in, hid, batch_first=True)
-        if att:
-            self.w = nn.Linear(hid, 1, bias=False)
-        self.fc = nn.Linear(hid, 1)
-
-    def forward(self, x):
-        o, _ = self.lstm(x)
-        o = (torch.softmax(self.w(o), 1) * o).sum(1) if self.att else o[:, -1]
-        return self.fc(o)
 
 
 ap = argparse.ArgumentParser()
@@ -160,13 +138,19 @@ if args.window == 30 and isinstance(meta.get("window"), int):
     args.window = int(meta["window"])
 
 df0 = pd.read_csv(args.csv, parse_dates=["date"])
-df0["date"] = pd.to_datetime(df0["date"], utc=True).dt.tz_localize(None)
+df0["date"] = pd.to_datetime(df0["date"], utc=True).dt.tz_convert(None)
 df0["granularity"] = (
     (df0["date"].dt.hour != 0) | (df0["date"].dt.minute != 0) | (df0["date"].dt.second != 0)
 ).astype(np.int8)
 df = fe(df0.sort_values("date"))
 
 feats = meta.get("features", [])
+use_interval_embedding = bool(meta.get("use_interval_embedding", False))
+if isinstance(meta.get("feats_lstm"), list):
+    feats_lstm = meta["feats_lstm"]
+else:
+    feats_lstm, _ = lstm_feature_columns(feats, use_interval_embedding)
+
 if "interval_id" in feats:
     df["interval_id"] = np.float32(interval_id_from_csv_stem(Path(args.csv).stem))
 
@@ -184,7 +168,13 @@ scaled_feats = (
     )
 )
 df[scaled_feats] = scaler.transform(df[scaled_feats]).astype(np.float32)
-X = build_seq(df, feats, args.window)
+X, iv, _, _ = build_seq_x_only(
+    df,
+    feats_lstm,
+    args.window,
+    use_interval_embedding=use_interval_embedding,
+    extra_next_bar=False,
+)
 if X.shape[0] == 0:
     print("\n" + "-" * LINE_WIDTH)
     print("[SKIP] Not enough bars for this model window")
@@ -208,11 +198,22 @@ if X.shape[0] == 0:
     print("-" * LINE_WIDTH + "\n")
     raise SystemExit(0)
 
-model = LSTMDir(len(feats), att=bool(meta.get("use_attn", False))).to(DEVICE)
-model.load_state_dict(torch.load(model_path, map_location=DEVICE))
+num_int = meta.get("num_interval_embeddings")
+embed_dim = int(meta.get("interval_embed_dim", 8))
+model = LSTMDir(
+    len(feats_lstm),
+    att=bool(meta.get("use_attn", False)),
+    num_intervals=(int(num_int) if use_interval_embedding and num_int is not None else None),
+    embed_dim=embed_dim,
+).to(DEVICE)
+model.load_state_dict(torch.load(model_path, map_location=DEVICE, weights_only=True))
 model.eval()
 with torch.no_grad():
-    probs = torch.sigmoid(model(torch.tensor(X).to(DEVICE))).cpu().numpy().flatten()
+    xt = torch.tensor(X).to(DEVICE)
+    if iv is not None:
+        probs = torch.sigmoid(model(xt, torch.tensor(iv).to(DEVICE))).cpu().numpy().flatten()
+    else:
+        probs = torch.sigmoid(model(xt)).cpu().numpy().flatten()
 
 fwd_ret = df["fwd_ret"].iloc[args.window:].values.astype(np.float64)
 bp = protocol.get("baseline_params", {})

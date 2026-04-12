@@ -18,14 +18,14 @@ if str(_ROOT) not in sys.path:
 from app.paths import MODEL_DIR
 from app.fe import add_technical_indicators
 from app.constants import INTERVAL_ID_ORDER, INTERVAL_ID_UNKNOWN, interval_id_from_csv_stem
+from app.model import LSTMDir, lstm_feature_columns
+from app.sequences import build_seq_multi, evaluate_split
 import numpy as np
 import pandas as pd
 import torch
 from torch import nn
 import sklearn
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
-
 # --- Device ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -35,63 +35,6 @@ def fe(df: pd.DataFrame):
     out["log_ret"] = np.log(out["close"]).diff().shift(-1)
     out["direction"] = (out["log_ret"] > 0).astype(np.float32)
     return out.dropna().reset_index(drop=True)
-
-def build_seq(frame, feats, window):
-    X, y = [], []
-    v = frame[feats].values.astype(np.float32)
-    d = frame["direction"].values.astype(np.float32)
-    for i in range(window, len(frame)):
-        X.append(v[i-window:i])
-        y.append(d[i])
-    return np.array(X), np.array(y).reshape(-1, 1)
-
-def build_seq_multi(frames, feats, window):
-    xs, ys = [], []
-    for fr in frames:
-        X_part, y_part = build_seq(fr, feats, window)
-        if X_part.shape[0] > 0:
-            xs.append(X_part)
-            ys.append(y_part)
-    if not xs:
-        return np.empty((0, window, len(feats)), dtype=np.float32), np.empty((0, 1), dtype=np.float32)
-    return np.concatenate(xs, axis=0), np.concatenate(ys, axis=0)
-
-def evaluate_split(model: nn.Module, frame: pd.DataFrame, feats, window: int, device, threshold: float):
-    X_eval, y_eval = build_seq_multi(frame, feats, window)
-    if X_eval.shape[0] == 0:
-        return None
-    model.eval()
-    with torch.no_grad():
-        logits = model(torch.tensor(X_eval).to(device))
-        probs = torch.sigmoid(logits).cpu().numpy().reshape(-1)
-    y_true = y_eval.reshape(-1).astype(int)
-    y_pred = (probs > threshold).astype(int)
-    return {
-        "n_samples": int(len(y_true)),
-        "accuracy": float(accuracy_score(y_true, y_pred)),
-        "precision": float(precision_score(y_true, y_pred, zero_division=0)),
-        "recall": float(recall_score(y_true, y_pred, zero_division=0)),
-        "f1": float(f1_score(y_true, y_pred, zero_division=0)),
-        "threshold": float(threshold),
-    }
-
-# --- Model ---
-class LSTMDir(nn.Module):
-    def __init__(self, d_in:int, hid:int=128, att:bool=False):
-        super().__init__()
-        self.att  = att
-        self.lstm = nn.LSTM(d_in, hid, batch_first=True)
-        if att:
-            self.w = nn.Linear(hid, 1, bias=False)
-        self.fc = nn.Linear(hid, 1)
-    def forward(self, x):
-        o, _ = self.lstm(x)
-        if self.att:
-            a = torch.softmax(self.w(o), dim=1)
-            o = (a * o).sum(1)
-        else:
-            o = o[:, -1]
-        return self.fc(o)
 
 # --- CLI ---
 ap = argparse.ArgumentParser()
@@ -175,7 +118,7 @@ set_seed(args.seed)
 # --- Load CSV + feature engineering (bar frequency hint) ---
 def read_and_fe(path: str):
     df = pd.read_csv(path, parse_dates=["date"])
-    df["date"] = pd.to_datetime(df["date"], utc=True).dt.tz_localize(None)
+    df["date"] = pd.to_datetime(df["date"], utc=True).dt.tz_convert(None)
     # 0 = daily bar, 1 = intraday if time component is not 00:00:00
     is_min = (df["date"].dt.hour != 0) | (df["date"].dt.minute != 0) | (df["date"].dt.second != 0)
     df["granularity"] = is_min.astype(np.int8)
@@ -209,7 +152,17 @@ def get_git_commit_hash() -> str | None:
     except Exception:
         return None
 
-def walk_forward_metrics(model, test_frames, feats, window, device, threshold, folds: int):
+def walk_forward_metrics(
+    model,
+    test_frames,
+    feats_lstm: list[str],
+    window,
+    device,
+    threshold,
+    folds: int,
+    *,
+    use_interval_embedding: bool,
+):
     if folds <= 1:
         return []
     per_fold = []
@@ -222,7 +175,15 @@ def walk_forward_metrics(model, test_frames, feats, window, device, threshold, f
             start = fidx * step
             end = n if fidx == folds - 1 else (fidx + 1) * step
             chunk = fr.iloc[start:end].copy()
-            met = evaluate_split(model, [chunk], feats, window, device, threshold)
+            met = evaluate_split(
+                model,
+                [chunk],
+                feats_lstm,
+                window,
+                device,
+                threshold,
+                use_interval_embedding=use_interval_embedding,
+            )
             if met is not None:
                 met["series_index"] = idx
                 met["fold_index"] = fidx
@@ -351,8 +312,12 @@ if "granularity" not in FEATS:
 if "interval_id" not in FEATS:
     FEATS.append("interval_id")
 
-# interval_id is ordinal (0..K); do not pass through StandardScaler.
+# interval_id is ordinal (0..K); do not pass through StandardScaler; embedding consumes raw ids in the model.
 FEATS_SCALED = [c for c in FEATS if c != "interval_id"]
+USE_INTERVAL_EMBEDDING = "interval_id" in FEATS
+FEATS_LSTM, _ = lstm_feature_columns(FEATS, USE_INTERVAL_EMBEDDING)
+INTERVAL_EMBED_DIM = 8
+NUM_INTERVAL_EMBEDDINGS = INTERVAL_ID_UNKNOWN + 1
 
 split_triplets = [split_frame_by_ratio(fr, args.train_ratio, args.val_ratio) for fr in frames]
 train_frames = [t[0] for t in split_triplets if len(t[0]) > 0]
@@ -373,18 +338,26 @@ for fr in val_frames:
 for fr in test_frames:
     fr[FEATS_SCALED] = sc.transform(fr[FEATS_SCALED]).astype(np.float32)
 
-X, y = build_seq_multi(train_frames, FEATS, args.window)
+X, y, iv_train = build_seq_multi(
+    train_frames, FEATS_LSTM, args.window, use_interval_embedding=USE_INTERVAL_EMBEDDING
+)
 if X.shape[0] == 0:
     sys.exit(f"[ERROR] Train sequences are insufficient for window={args.window}")
-X_val, y_val = build_seq_multi(val_frames, FEATS, args.window)
+X_val, y_val, iv_val = build_seq_multi(
+    val_frames, FEATS_LSTM, args.window, use_interval_embedding=USE_INTERVAL_EMBEDDING
+)
 if X_val.shape[0] == 0:
     sys.exit(f"[ERROR] Validation sequences are insufficient for window={args.window}")
 
-test_seq_count = build_seq_multi(test_frames, FEATS, args.window)[0].shape[0]
+test_seq_count = build_seq_multi(
+    test_frames, FEATS_LSTM, args.window, use_interval_embedding=USE_INTERVAL_EMBEDDING
+)[0].shape[0]
 print_kv_section(
     "TRAINING DATA SUMMARY",
     [
         ("features", str(len(FEATS))),
+        ("lstm_inputs", str(len(FEATS_LSTM))),
+        ("interval_embedding", str(USE_INTERVAL_EMBEDDING)),
         ("train rows", str(sum(len(fr) for fr in train_frames))),
         ("val rows", str(sum(len(fr) for fr in val_frames))),
         ("test rows", str(sum(len(fr) for fr in test_frames))),
@@ -395,32 +368,53 @@ print_kv_section(
     border="-",
 )
 
-ds = torch.utils.data.TensorDataset(torch.tensor(X), torch.tensor(y))
+if iv_train is not None:
+    ds = torch.utils.data.TensorDataset(
+        torch.tensor(X), torch.tensor(iv_train), torch.tensor(y)
+    )
+else:
+    ds = torch.utils.data.TensorDataset(torch.tensor(X), torch.tensor(y))
 dl_gen = torch.Generator()
 dl_gen.manual_seed(args.seed)
 dl = torch.utils.data.DataLoader(ds, args.batch, shuffle=True, generator=dl_gen)
 
-model = LSTMDir(len(FEATS), att=args.use_attn).to(DEVICE)
+model = LSTMDir(
+    len(FEATS_LSTM),
+    att=args.use_attn,
+    num_intervals=(NUM_INTERVAL_EMBEDDINGS if USE_INTERVAL_EMBEDDING else None),
+    embed_dim=INTERVAL_EMBED_DIM,
+).to(DEVICE)
 pos_ratio = y.mean(); neg_ratio = 1 - pos_ratio
 safe_pos = max(float(pos_ratio), 1e-6)
 crit = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([neg_ratio/safe_pos]).to(DEVICE))
 opt  = torch.optim.Adam(model.parameters(), args.lr)
 val_xb = torch.tensor(X_val).to(DEVICE)
 val_yb = torch.tensor(y_val).to(DEVICE)
+val_ivb = torch.tensor(iv_val).to(DEVICE) if iv_val is not None else None
 
 best, wait = math.inf, 0
 epoch_history: list[dict] = []
 for ep in range(args.epochs):
     model.train(); loss_sum = 0.0
-    for xb, yb in dl:
-        xb, yb = xb.to(DEVICE), yb.to(DEVICE)
-        opt.zero_grad()
-        loss = crit(model(xb), yb); loss.backward(); opt.step()
-        loss_sum += loss.item() * len(xb)
+    if iv_train is not None:
+        for xb, ivb, yb in dl:
+            xb, ivb, yb = xb.to(DEVICE), ivb.to(DEVICE), yb.to(DEVICE)
+            opt.zero_grad()
+            loss = crit(model(xb, ivb), yb); loss.backward(); opt.step()
+            loss_sum += loss.item() * len(xb)
+    else:
+        for xb, yb in dl:
+            xb, yb = xb.to(DEVICE), yb.to(DEVICE)
+            opt.zero_grad()
+            loss = crit(model(xb), yb); loss.backward(); opt.step()
+            loss_sum += loss.item() * len(xb)
     avg_train = loss_sum / len(ds)
     model.eval()
     with torch.no_grad():
-        avg_val = crit(model(val_xb), val_yb).item()
+        if val_ivb is not None:
+            avg_val = crit(model(val_xb, val_ivb), val_yb).item()
+        else:
+            avg_val = crit(model(val_xb), val_yb).item()
     improved = avg_val < best
     if improved:
         best, wait = avg_val, 0
@@ -460,12 +454,40 @@ with open(scaler_path, "wb") as f:
     pickle.dump(sc, f)
 
 # Evaluate best checkpoint on val/test splits
-best_model = LSTMDir(len(FEATS), att=args.use_attn).to(DEVICE)
-best_model.load_state_dict(torch.load(save_path, map_location=DEVICE))
-val_metrics = evaluate_split(best_model, val_frames, FEATS, args.window, DEVICE, args.eval_threshold)
-test_metrics = evaluate_split(best_model, test_frames, FEATS, args.window, DEVICE, args.eval_threshold)
+best_model = LSTMDir(
+    len(FEATS_LSTM),
+    att=args.use_attn,
+    num_intervals=(NUM_INTERVAL_EMBEDDINGS if USE_INTERVAL_EMBEDDING else None),
+    embed_dim=INTERVAL_EMBED_DIM,
+).to(DEVICE)
+best_model.load_state_dict(torch.load(save_path, map_location=DEVICE, weights_only=True))
+val_metrics = evaluate_split(
+    best_model,
+    val_frames,
+    FEATS_LSTM,
+    args.window,
+    DEVICE,
+    args.eval_threshold,
+    use_interval_embedding=USE_INTERVAL_EMBEDDING,
+)
+test_metrics = evaluate_split(
+    best_model,
+    test_frames,
+    FEATS_LSTM,
+    args.window,
+    DEVICE,
+    args.eval_threshold,
+    use_interval_embedding=USE_INTERVAL_EMBEDDING,
+)
 wf_metrics = walk_forward_metrics(
-    best_model, test_frames, FEATS, args.window, DEVICE, args.eval_threshold, args.walk_forward_folds
+    best_model,
+    test_frames,
+    FEATS_LSTM,
+    args.window,
+    DEVICE,
+    args.eval_threshold,
+    args.walk_forward_folds,
+    use_interval_embedding=USE_INTERVAL_EMBEDDING,
 )
 
 print_eval_section(val_metrics, test_metrics, args.window)
@@ -478,6 +500,10 @@ meta = {
     "eval_threshold": args.eval_threshold,
     "walk_forward_folds": args.walk_forward_folds,
     "features": FEATS,
+    "feats_lstm": FEATS_LSTM,
+    "use_interval_embedding": USE_INTERVAL_EMBEDDING,
+    "num_interval_embeddings": NUM_INTERVAL_EMBEDDINGS if USE_INTERVAL_EMBEDDING else None,
+    "interval_embed_dim": INTERVAL_EMBED_DIM if USE_INTERVAL_EMBEDDING else None,
     "features_scaled": FEATS_SCALED,
     "interval_id_map": {str(i): name for i, name in enumerate(INTERVAL_ID_ORDER)}
     | {str(INTERVAL_ID_UNKNOWN): "unknown"},
@@ -493,7 +519,11 @@ meta = {
     "split_sizes_sequences": {
         "train": int(X.shape[0]),
         "val": int(X_val.shape[0]),
-        "test": int(build_seq_multi(test_frames, FEATS, args.window)[0].shape[0]),
+        "test": int(
+            build_seq_multi(
+                test_frames, FEATS_LSTM, args.window, use_interval_embedding=USE_INTERVAL_EMBEDDING
+            )[0].shape[0]
+        ),
     },
     "epoch_history": epoch_history,
     "versions": {

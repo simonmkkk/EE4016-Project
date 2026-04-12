@@ -15,41 +15,30 @@ if str(_ROOT) not in sys.path:
 from app.paths import RESULTS_DIR
 from app.fe import add_technical_indicators
 from app.constants import interval_id_from_csv_stem
+from app.model import LSTMDir, lstm_feature_columns
+from app.sequences import build_seq_x_only
 
 import numpy as np
 import pandas as pd
 import torch
-from torch import nn
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# --- Feature engineering ---
-def fe(df: pd.DataFrame):
+
+def fe(df: pd.DataFrame, *, keep_last_bar: bool = False):
+    """If keep_last_bar, retain the final row even when next-bar log_ret/direction is unknown."""
     out = add_technical_indicators(df)
     out["log_ret"] = np.log(out["close"]).diff().shift(-1)
-    out["direction"] = (out["log_ret"] > 0).astype(np.float32)
+    out["direction"] = np.where(
+        out["log_ret"].notna(),
+        (out["log_ret"] > 0).astype(np.float32),
+        np.nan,
+    )
+    if keep_last_bar:
+        drop_subset = [c for c in out.columns if c not in ("log_ret", "direction")]
+        return out.dropna(subset=drop_subset).reset_index(drop=True)
     return out.dropna().reset_index(drop=True)
 
-def build_seq(frame, feats, window):
-    X = []
-    v = frame[feats].values.astype(np.float32)
-    for i in range(window, len(frame)):
-        X.append(v[i-window:i])
-    return np.array(X)
-
-# --- Model ---
-class LSTMDir(nn.Module):
-    def __init__(self, d_in:int, hid:int=128, att:bool=False):
-        super().__init__()
-        self.att  = att
-        self.lstm = nn.LSTM(d_in, hid, batch_first=True)
-        if att:
-            self.w = nn.Linear(hid, 1, bias=False)
-        self.fc = nn.Linear(hid, 1)
-    def forward(self, x):
-        o, _ = self.lstm(x)
-        o = (torch.softmax(self.w(o),1)*o).sum(1) if self.att else o[:, -1]
-        return self.fc(o)
 
 # --- CLI & interactive mode ---
 ap = argparse.ArgumentParser()
@@ -111,11 +100,11 @@ result_dir.mkdir(parents=True, exist_ok=True)
 
 # --- Load CSV + granularity flag ---
 df0 = pd.read_csv(args.csv, parse_dates=["date"])
-df0["date"] = pd.to_datetime(df0["date"], utc=True).dt.tz_localize(None)
+df0["date"] = pd.to_datetime(df0["date"], utc=True).dt.tz_convert(None)
 df0["granularity"] = ((df0["date"].dt.hour != 0) |
                       (df0["date"].dt.minute != 0) |
                       (df0["date"].dt.second != 0)).astype(np.int8)
-df = fe(df0.sort_values("date"))
+df = fe(df0.sort_values("date"), keep_last_bar=True)
 
 FEATS = [c for c in df.columns if c not in ["date", "log_ret", "direction"]]
 if "granularity" not in FEATS:
@@ -143,6 +132,12 @@ if args.threshold is None:
     else:
         args.threshold = 0.4
 
+use_interval_embedding = bool(meta.get("use_interval_embedding", False)) if isinstance(meta, dict) else False
+if isinstance(meta, dict) and isinstance(meta.get("feats_lstm"), list):
+    feats_lstm = meta["feats_lstm"]
+else:
+    feats_lstm, _ = lstm_feature_columns(trained_feats, use_interval_embedding)
+
 if "interval_id" in trained_feats:
     df["interval_id"] = np.float32(interval_id_from_csv_stem(Path(args.csv).stem))
 
@@ -165,20 +160,53 @@ scaled_feats = (
     )
 )
 df[scaled_feats] = sc.transform(df[scaled_feats]).astype(np.float32)
-X = build_seq(df, FEATS, args.window)
+
+X, iv, x_next, iv_next = build_seq_x_only(
+    df,
+    feats_lstm,
+    args.window,
+    use_interval_embedding=use_interval_embedding,
+    extra_next_bar=True,
+)
 if X.shape[0] == 0:
     sys.exit(f"[ERROR] Data rows are insufficient for window={args.window}")
 
-# --- Inference ---
-model = LSTMDir(len(FEATS), att=args.use_attn).to(DEVICE)
-model.load_state_dict(torch.load(args.model, map_location=DEVICE)); model.eval()
+num_int = meta.get("num_interval_embeddings") if isinstance(meta, dict) else None
+embed_dim = int(meta.get("interval_embed_dim", 8)) if isinstance(meta, dict) else 8
+model = LSTMDir(
+    len(feats_lstm),
+    att=args.use_attn,
+    num_intervals=(int(num_int) if use_interval_embedding and num_int is not None else None),
+    embed_dim=embed_dim,
+).to(DEVICE)
+model.load_state_dict(torch.load(args.model, map_location=DEVICE, weights_only=True))
+model.eval()
 with torch.no_grad():
-    probs = torch.sigmoid(model(torch.tensor(X).to(DEVICE))).cpu().numpy().flatten()
+    xt = torch.tensor(X).to(DEVICE)
+    if iv is not None:
+        probs = torch.sigmoid(model(xt, torch.tensor(iv).to(DEVICE))).cpu().numpy().flatten()
+    else:
+        probs = torch.sigmoid(model(xt)).cpu().numpy().flatten()
 
-preds   = (probs > args.threshold).astype(int)
-actual  = df["direction"].iloc[args.window:].astype(int).values
-correct = preds == actual
-high_conf_wrong = (probs >= args.conf_thresh) & (~correct)
+preds = (probs > args.threshold).astype(int)
+actual = df["direction"].iloc[args.window:].values.astype(float)
+has_label = ~np.isnan(actual)
+correct = np.zeros(len(preds), dtype=bool)
+correct[has_label] = preds[has_label] == actual[has_label].astype(int)
+high_conf_wrong = np.zeros(len(preds), dtype=bool)
+high_conf_wrong[has_label] = (probs[has_label] >= args.conf_thresh) & (
+    preds[has_label] != actual[has_label].astype(int)
+)
+
+prob_next = None
+if x_next is not None:
+    with torch.no_grad():
+        xn = torch.tensor(x_next).to(DEVICE)
+        if iv_next is not None:
+            prob_next = float(torch.sigmoid(model(xn, torch.tensor(iv_next).to(DEVICE))).cpu().item())
+        else:
+            prob_next = float(torch.sigmoid(model(xn)).cpu().item())
+
 
 # --- Explanation helpers ---
 def gen_explanation(feat_row, pred):
@@ -197,8 +225,8 @@ def gen_explanation(feat_row, pred):
     direction = "up" if pred else "down"
     return f"{direction} bias: " + ("; ".join(reasons) if reasons else "no strong signal")
 
-def why_wrong(feat_row, is_correct):
-    if is_correct:
+def why_wrong(feat_row, is_correct, labeled: bool):
+    if not labeled or is_correct:
         return ""
     tips = []
     bull = (feat_row["rsi"] > 55) + (feat_row["macd"] > 0)
@@ -211,8 +239,8 @@ def why_wrong(feat_row, is_correct):
         tips.append("threshold or features insufficient")
     return "; ".join(tips)
 
-def improve_tip(feat_row, is_correct):
-    if is_correct:
+def improve_tip(feat_row, is_correct, labeled: bool):
+    if not labeled or is_correct:
         return ""
     adv = []
     if abs(feat_row["rsi"] - 50) < 5:
@@ -240,9 +268,10 @@ out_df = pd.DataFrame({
 exps, whys, tips = [], [], []
 for i in range(len(out_df)):
     feat_row = feat_part.iloc[i]
+    labeled = bool(has_label[i])
     exps.append(gen_explanation(feat_row, preds[i]))
-    whys.append(why_wrong(feat_row, correct[i]))
-    tips.append(improve_tip(feat_row, correct[i]))
+    whys.append(why_wrong(feat_row, correct[i], labeled))
+    tips.append(improve_tip(feat_row, correct[i], labeled))
 
 out_df["explanation"] = exps
 out_df["why_wrong"]   = whys
@@ -252,14 +281,21 @@ out_df["improve_tip"] = tips
 # --- Print and save ---
 print("\nLast 5 predictions (with explanation):")
 print(out_df.tail(5).to_string(index=False, max_colwidth=60))
-acc = correct.mean()*100
-print(f"\nAccuracy = {acc:.2f}%")
+if prob_next is not None:
+    print(
+        f"\nNext-bar forecast (after last close, label unknown): "
+        f"P(up)={prob_next:.4f}  pred={'up' if prob_next > args.threshold else 'down'}"
+    )
+acc = float(correct[has_label].mean() * 100) if has_label.any() else 0.0
+print(f"\nAccuracy (labeled rows only) = {acc:.2f}%")
 
 out_filename = (Path(args.out).name if args.out else f"{Path(args.csv).stem}_pred.csv")
 out_path = result_dir / out_filename
 out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
 with open(out_path, "a", encoding="utf-8-sig") as f:
-    f.write(f"\naccuracy,,,{acc:.2f}%\n")
+    f.write(f"\naccuracy_labeled_rows_only,,,{acc:.2f}%\n")
+    if prob_next is not None:
+        f.write(f"next_bar_forecast_prob,,,{prob_next:.6f}\n")
 print(f"[OK] saved to {out_path}")
 
 bad_rows = out_df[out_df["high_conf_wrong"]]
