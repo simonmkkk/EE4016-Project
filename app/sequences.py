@@ -81,6 +81,29 @@ def build_seq_multi(
     return X_cat, y_cat, None
 
 
+def _batched_sigmoid_probs(
+    model: nn.Module,
+    X_eval: np.ndarray,
+    iv_eval: np.ndarray | None,
+    device: torch.device,
+    batch_size: int,
+) -> np.ndarray:
+    """Run model on all rows without loading the full batch onto GPU at once."""
+    n = X_eval.shape[0]
+    chunks: list[np.ndarray] = []
+    model.eval()
+    with torch.no_grad():
+        for start in range(0, n, batch_size):
+            end = min(start + batch_size, n)
+            x_t = torch.tensor(X_eval[start:end]).to(device)
+            if iv_eval is not None:
+                logits = model(x_t, torch.tensor(iv_eval[start:end]).to(device))
+            else:
+                logits = model(x_t)
+            chunks.append(torch.sigmoid(logits).cpu().numpy())
+    return np.concatenate(chunks, axis=0).reshape(-1)
+
+
 def build_seq_x_only(
     frame: pd.DataFrame,
     feats_lstm: list[str],
@@ -120,6 +143,7 @@ def val_probs_for_threshold_search(
     device: torch.device,
     *,
     use_interval_embedding: bool,
+    inference_batch_size: int = 256,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Return (probs, y_true) on validation frames for threshold grid search."""
     X_eval, y_eval, iv_eval = build_seq_multi(
@@ -127,14 +151,9 @@ def val_probs_for_threshold_search(
     )
     if X_eval.shape[0] == 0:
         return None
-    model.eval()
-    x_t = torch.tensor(X_eval).to(device)
-    with torch.no_grad():
-        if iv_eval is not None:
-            logits = model(x_t, torch.tensor(iv_eval).to(device))
-        else:
-            logits = model(x_t)
-        probs = torch.sigmoid(logits).cpu().numpy().reshape(-1)
+    probs = _batched_sigmoid_probs(
+        model, X_eval, iv_eval, device, inference_batch_size
+    )
     y_true = y_eval.reshape(-1).astype(int)
     return probs, y_true
 
@@ -148,6 +167,7 @@ def evaluate_split(
     threshold: float,
     *,
     use_interval_embedding: bool,
+    inference_batch_size: int = 256,
 ) -> dict | None:
     frames = [frame] if isinstance(frame, pd.DataFrame) else frame
     X_eval, y_eval, iv_eval = build_seq_multi(
@@ -155,14 +175,9 @@ def evaluate_split(
     )
     if X_eval.shape[0] == 0:
         return None
-    model.eval()
-    x_t = torch.tensor(X_eval).to(device)
-    with torch.no_grad():
-        if iv_eval is not None:
-            logits = model(x_t, torch.tensor(iv_eval).to(device))
-        else:
-            logits = model(x_t)
-        probs = torch.sigmoid(logits).cpu().numpy().reshape(-1)
+    probs = _batched_sigmoid_probs(
+        model, X_eval, iv_eval, device, inference_batch_size
+    )
     y_true = y_eval.reshape(-1).astype(int)
     y_pred = (probs > threshold).astype(int)
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()

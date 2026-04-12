@@ -80,6 +80,12 @@ ap.add_argument(
     help="path to metadata .json (default: same basename as model with .meta.json)",
 )
 ap.add_argument("--seed", type=int, default=42)
+ap.add_argument(
+    "--infer_batch",
+    type=int,
+    default=256,
+    help="Inference batch size (avoids GPU OOM on long CSVs).",
+)
 args = ap.parse_args()
 
 def set_seed(seed: int):
@@ -174,21 +180,31 @@ if X.shape[0] == 0:
 num_int = meta.get("num_interval_embeddings") if isinstance(meta, dict) else None
 embed_dim = int(meta.get("interval_embed_dim", 8)) if isinstance(meta, dict) else 8
 num_layers = int(meta.get("num_layers", 1)) if isinstance(meta, dict) else 1
+dropout = float(meta.get("dropout", 0.3)) if isinstance(meta, dict) else 0.3
 model = LSTMDir(
     len(feats_lstm),
     att=args.use_attn,
     num_layers=num_layers,
     num_intervals=(int(num_int) if use_interval_embedding and num_int is not None else None),
     embed_dim=embed_dim,
+    dropout=dropout,
 ).to(DEVICE)
 model.load_state_dict(torch.load(args.model, map_location=DEVICE, weights_only=True))
 model.eval()
+infer_bs = max(1, int(args.infer_batch))
+n_seq = X.shape[0]
+chunks: list[np.ndarray] = []
 with torch.no_grad():
-    xt = torch.tensor(X).to(DEVICE)
-    if iv is not None:
-        probs = torch.sigmoid(model(xt, torch.tensor(iv).to(DEVICE))).cpu().numpy().flatten()
-    else:
-        probs = torch.sigmoid(model(xt)).cpu().numpy().flatten()
+    for i0 in range(0, n_seq, infer_bs):
+        i1 = min(i0 + infer_bs, n_seq)
+        xb = torch.tensor(X[i0:i1]).to(DEVICE)
+        if iv is not None:
+            ivb = torch.tensor(iv[i0:i1]).to(DEVICE)
+            pb = torch.sigmoid(model(xb, ivb)).cpu().numpy().reshape(-1)
+        else:
+            pb = torch.sigmoid(model(xb)).cpu().numpy().reshape(-1)
+        chunks.append(pb)
+probs = np.concatenate(chunks, axis=0)
 
 preds = (probs > args.threshold).astype(int)
 actual = df["direction"].iloc[args.window:].values.astype(float)

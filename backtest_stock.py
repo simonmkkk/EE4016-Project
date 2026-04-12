@@ -46,6 +46,12 @@ ap.add_argument("--fee", type=float, default=0.001, help="transaction fee per po
 ap.add_argument("--out", help="output csv filename")
 ap.add_argument("--protocol", type=str, help="Path to experiment protocol json for baseline parameters")
 ap.add_argument("--eval_split", choices=["all", "test"], default="test", help="Evaluate on full data or unseen test split")
+ap.add_argument(
+    "--infer_batch",
+    type=int,
+    default=256,
+    help="Inference batch size for LSTM (avoids GPU OOM when backtesting long CSVs). Use 128 or 64 if still OOM.",
+)
 args = ap.parse_args()
 
 LINE_WIDTH = 70
@@ -201,21 +207,31 @@ if X.shape[0] == 0:
 num_int = meta.get("num_interval_embeddings")
 embed_dim = int(meta.get("interval_embed_dim", 8))
 num_layers = int(meta.get("num_layers", 1))
+dropout = float(meta.get("dropout", 0.3))
 model = LSTMDir(
     len(feats_lstm),
     att=bool(meta.get("use_attn", False)),
     num_layers=num_layers,
     num_intervals=(int(num_int) if use_interval_embedding and num_int is not None else None),
     embed_dim=embed_dim,
+    dropout=dropout,
 ).to(DEVICE)
 model.load_state_dict(torch.load(model_path, map_location=DEVICE, weights_only=True))
 model.eval()
+infer_bs = max(1, int(args.infer_batch))
+n_seq = X.shape[0]
+chunks: list[np.ndarray] = []
 with torch.no_grad():
-    xt = torch.tensor(X).to(DEVICE)
-    if iv is not None:
-        probs = torch.sigmoid(model(xt, torch.tensor(iv).to(DEVICE))).cpu().numpy().flatten()
-    else:
-        probs = torch.sigmoid(model(xt)).cpu().numpy().flatten()
+    for i0 in range(0, n_seq, infer_bs):
+        i1 = min(i0 + infer_bs, n_seq)
+        xb = torch.tensor(X[i0:i1]).to(DEVICE)
+        if iv is not None:
+            ivb = torch.tensor(iv[i0:i1]).to(DEVICE)
+            pb = torch.sigmoid(model(xb, ivb)).cpu().numpy().reshape(-1)
+        else:
+            pb = torch.sigmoid(model(xb)).cpu().numpy().reshape(-1)
+        chunks.append(pb)
+probs = np.concatenate(chunks, axis=0)
 
 fwd_ret = df["fwd_ret"].iloc[args.window:].values.astype(np.float64)
 bp = protocol.get("baseline_params", {})

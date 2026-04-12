@@ -26,6 +26,7 @@ class LSTMDir(nn.Module):
         num_layers: int = 2,
         num_intervals: int | None = None,
         embed_dim: int = 8,
+        dropout: float = 0.3,
     ):
         super().__init__()
         self.att = att
@@ -37,7 +38,7 @@ class LSTMDir(nn.Module):
             self.lstm_stack.append(nn.LSTM(hid, hid, num_layers=1, batch_first=True))
         if att:
             self.w = nn.Linear(hid, 1, bias=False)
-        self.dropout = nn.Dropout(p=0.3)
+        self.dropout = nn.Dropout(p=float(dropout))
         self.interval_emb: nn.Embedding | None
         if num_intervals is not None:
             self.interval_emb = nn.Embedding(num_intervals, embed_dim)
