@@ -409,6 +409,7 @@ val_xb = torch.tensor(X_val).to(DEVICE)
 val_yb = torch.tensor(y_val).to(DEVICE)
 
 best, wait = math.inf, 0
+epoch_history: list[dict] = []
 for ep in range(args.epochs):
     model.train(); loss_sum = 0.0
     for xb, yb in dl:
@@ -427,6 +428,18 @@ for ep in range(args.epochs):
     else:
         wait += 1
 
+    epoch_history.append(
+        {
+            "epoch": ep + 1,
+            "epochs": args.epochs,
+            "train_loss": float(avg_train),
+            "val_loss": float(avg_val),
+            "best_val_loss": float(best),
+            "wait": int(wait),
+            "patience": int(args.patience),
+            "improved": bool(improved),
+        }
+    )
     print(
         f"[E{ep+1:03d}/{args.epochs:03d}] "
         f"train={avg_train:.4f} "
@@ -482,6 +495,7 @@ meta = {
         "val": int(X_val.shape[0]),
         "test": int(build_seq_multi(test_frames, FEATS, args.window)[0].shape[0]),
     },
+    "epoch_history": epoch_history,
     "versions": {
         "python": sys.version.split()[0],
         "torch": torch.__version__,

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from ..constants import interval_id_from_csv_stem
 from ..paths import PROJECT_ROOT, SAVE_DIR, MODEL_DIR
 from ..state import load_state, save_state
 from ..ui import choose_from_list, choose_multiple_from_list
@@ -14,7 +15,14 @@ def rel(p: Path) -> str:
 
 def list_historical_csvs() -> list[Path]:
     rec = SAVE_DIR
-    return sorted(rec.glob("*.csv"), key=lambda p: p.name.lower()) if rec.exists() else []
+    if not rec.exists():
+        return []
+
+    def sort_key(p: Path) -> tuple[int, str]:
+        # interval_id matches INTERVAL_ID_ORDER (shortest→longest); unknown last
+        return (interval_id_from_csv_stem(p.stem), p.stem.lower())
+
+    return sorted(rec.glob("*.csv"), key=sort_key)
 
 
 def list_model_pts() -> list[Path]:
