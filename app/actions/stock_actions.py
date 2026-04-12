@@ -129,9 +129,48 @@ def run_train_from_historical_csv() -> bool:
         use_attn = ask_yes_no("Use Attention?", default=True)
         print(f"  Selected attention: {'enabled' if use_attn else 'disabled'}")
 
+        _ltq_in = ask(
+            "label_threshold_quantile (per-series; Enter=0.55; type fixed for fixed threshold)",
+            "0.55",
+        )
+        _ltq: float | None = None
+        _ltq_raw = _ltq_in.strip().lower()
+        if _ltq_raw in ("fixed", "manual"):
+            print("  Selected label mode  : fixed threshold (next prompt)")
+        elif _ltq_in.strip():
+            try:
+                _ltq = float(_ltq_in)
+                if not (0.0 < _ltq < 1.0):
+                    raise ValueError
+                print(f"  Selected label mode  : per-series quantile {_ltq:.2f} (top {1-_ltq:.0%} UP per series)")
+            except ValueError:
+                print("  [WARN] Invalid quantile, falling back to fixed threshold.")
+                _ltq = None
+
+        if _ltq is None:
+            label_threshold = ask("label_threshold (0=any up, e.g. 0.003=+0.3% only)", "0")
+            try:
+                _lt = float(label_threshold)
+                if _lt < 0:
+                    raise ValueError
+            except ValueError:
+                print("  [WARN] Invalid label_threshold, using 0.")
+                label_threshold = "0"
+                _lt = 0.0
+            _lt_desc = f"log_ret > {_lt:.4f}" if _lt > 0 else "any positive return"
+            print(f"  Selected label_threshold: {label_threshold} ({_lt_desc})")
+        else:
+            label_threshold = "0"
+            _lt = 0.0
+            _lt_desc = f"per-series quantile {_ltq:.2f}"
+
         extra = ["--csvs", *[str(p) for p in csv_paths], "--ticker", tic, "--save_model", "model.pt", "--window", str(window), "--epochs", str(epochs)]
         if use_attn:
             extra.append("--use_attn")
+        if _ltq is not None:
+            extra += ["--label_threshold_quantile", str(_ltq)]
+        elif _lt != 0.0:
+            extra += ["--label_threshold", label_threshold]
         _print_block(
             "Train Summary",
             [
@@ -140,6 +179,7 @@ def run_train_from_historical_csv() -> bool:
                 ("Epochs", str(epochs)),
                 ("Window", str(window)),
                 ("Attention", "enabled" if use_attn else "disabled"),
+                ("Label mode", _lt_desc),
             ],
         )
         _print_list("CSV Files:", selected_csvs)
