@@ -5,7 +5,13 @@ import numpy as np
 import pandas as pd
 import torch
 from torch import nn
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+)
 
 
 def build_seq(
@@ -159,6 +165,8 @@ def evaluate_split(
         probs = torch.sigmoid(logits).cpu().numpy().reshape(-1)
     y_true = y_eval.reshape(-1).astype(int)
     y_pred = (probs > threshold).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
+    pred_pos_rate = float(np.mean(y_pred))
     return {
         "n_samples": int(len(y_true)),
         "accuracy": float(accuracy_score(y_true, y_pred)),
@@ -166,4 +174,9 @@ def evaluate_split(
         "recall": float(recall_score(y_true, y_pred, zero_division=0)),
         "f1": float(f1_score(y_true, y_pred, zero_division=0)),
         "threshold": float(threshold),
+        "tn": int(tn),
+        "fp": int(fp),
+        "fn": int(fn),
+        "tp": int(tp),
+        "pred_positive_rate": pred_pos_rate,
     }
