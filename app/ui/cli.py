@@ -1,4 +1,35 @@
 import os
+import sys
+
+
+def _drain_stdin_buffer() -> None:
+    """Discard buffered keyboard input so pause waits for fresh input only."""
+    if os.name == "nt":
+        try:
+            import msvcrt
+        except ImportError:
+            return
+        while msvcrt.kbhit():
+            msvcrt.getwch()
+        return
+
+    try:
+        import select
+        import termios
+    except ImportError:
+        return
+
+    stream = sys.stdin
+    if not stream.isatty():
+        return
+    while True:
+        readable, _, _ = select.select([stream], [], [], 0)
+        if not readable:
+            break
+        try:
+            termios.tcflush(stream.fileno(), termios.TCIFLUSH)
+        except termios.error:
+            break
 
 
 def ask(prompt: str, default: str | None = None) -> str:
@@ -11,13 +42,15 @@ def ask(prompt: str, default: str | None = None) -> str:
 
 def ask_yes_no(prompt: str, default: bool = True) -> bool:
     d = "Y/n" if default else "y/N"
-    raw = input(f"  {prompt} [{d}]: ").strip().lower()
+    default_label = "yes" if default else "no"
+    raw = input(f"  {prompt} [{d}, default={default_label}]: ").strip().lower()
     if not raw:
         return default
     return raw.startswith("y")
 
 
 def pause() -> None:
+    _drain_stdin_buffer()
     input("\n  Press Enter to continue...")
 
 
