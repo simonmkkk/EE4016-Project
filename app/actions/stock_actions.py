@@ -119,18 +119,22 @@ def run_train_from_historical_csv() -> bool:
         selected_csvs = [rel(p) for p in csv_paths]
         _print_list("Selected CSVs:", selected_csvs)
         print(f"  Selected ticker  : {tic}")
+        print("")
 
         epochs = ask("epochs", "100")
         print(f"  Selected epochs  : {epochs}")
+        print("")
 
-        window = ask("window", "30")
+        window = ask("window", "100")
         print(f"  Selected window  : {window}")
+        print("")
 
         use_attn = ask_yes_no("Use Attention?", default=True)
         print(f"  Selected attention: {'enabled' if use_attn else 'disabled'}")
+        print("")
 
         _ltq_in = ask(
-            "label_threshold_quantile (per-series; Enter=0.55; type fixed for fixed threshold)",
+            "label mode (quantile / fixed, e.g. 0.55 or fixed)",
             "0.55",
         )
         _ltq: float | None = None
@@ -239,9 +243,12 @@ def run_backtest_pick_csv_and_model():
         if decision_threshold
         else f"metadata default ({meta_threshold:g})" if isinstance(meta_threshold, float) else "metadata default"
     )
+    print("")
 
     transaction_fee_rate = ask("transaction_fee_rate", "0.001")
+    print("")
     evaluation_split = ask("evaluation_split (test/all)", "test").lower()
+    print("")
 
     attach_protocol_baseline_parameters = ask_yes_no("attach_protocol_baseline_parameters?", default=False)
     protocol = pick_protocol() if attach_protocol_baseline_parameters else None
@@ -281,15 +288,26 @@ def run_backtest_pick_csv_and_model():
     print(f"  protocol_path            : {rel(protocol) if protocol is not None else 'none'}")
     if ask_yes_no("Ready to backtest?", default=True):
         print("")
-        recap_rows: list[tuple[str, float, float, float]] = []
+        _nan = float("nan")
+        _STRAT_KEYS = ["model_lstm", "buy_and_hold", "macd", "rsi", "bollinger"]
+        _STRAT_LABELS = ["LSTM", "Buy&Hold", "MACD", "RSI", "Bollinger"]
+        _METRICS = ["total_return", "sharpe", "max_drawdown", "win_rate"]
+
+        def _empty_row(stem: str) -> dict:
+            row: dict = {"stem": stem, "window_reduced": False,
+                         "acc": _nan, "f1": _nan}
+            for sk in _STRAT_KEYS:
+                row[sk] = {m: _nan for m in _METRICS}
+            return row
+
+        recap_rows: list[dict] = []
         for csv_path in csv_paths:
             extra = ["--csv", str(csv_path), *extra_base]
             try:
                 run_script("backtest_stock.py", extra)
             except subprocess.CalledProcessError as e:
                 print(f"\n  [WARN] backtest_stock.py failed for {rel(csv_path)} (exit {e.returncode}); continuing.\n")
-                stem = csv_path.stem
-                recap_rows.append((stem, float("nan"), float("nan"), float("nan")))
+                recap_rows.append(_empty_row(csv_path.stem))
                 continue
             stem = csv_path.stem
             summary_path = RESULTS_DIR / tic / f"{stem}_bt_summary.json"
@@ -298,35 +316,131 @@ def run_backtest_pick_csv_and_model():
                     with open(summary_path, "r", encoding="utf-8") as f:
                         s = json.load(f)
                     if s.get("status") == "skipped":
-                        recap_rows.append((stem, float("nan"), float("nan"), float("nan")))
+                        recap_rows.append(_empty_row(stem))
                         continue
-                    ml = s.get("strategies", {}).get("model_lstm", {})
+                    strats = s.get("strategies", {})
                     pm = s.get("predictive_metrics_model", {})
-                    recap_rows.append(
-                        (
-                            stem,
-                            float(ml.get("total_return", 0.0)),
-                            float(pm.get("accuracy", 0.0)),
-                            float(pm.get("f1", 0.0)),
-                        )
-                    )
+                    row: dict = {
+                        "stem": stem,
+                        "window_reduced": False,
+                        "acc": float(pm.get("accuracy", _nan)),
+                        "f1":  float(pm.get("f1", _nan)),
+                    }
+                    for sk in _STRAT_KEYS:
+                        sd = strats.get(sk, {})
+                        row[sk] = {m: float(sd.get(m, _nan)) for m in _METRICS}
+                    recap_rows.append(row)
                 except (OSError, json.JSONDecodeError, TypeError, ValueError):
-                    recap_rows.append((stem, float("nan"), float("nan"), float("nan")))
+                    recap_rows.append(_empty_row(stem))
             else:
-                recap_rows.append((stem, float("nan"), float("nan"), float("nan")))
+                recap_rows.append(_empty_row(stem))
 
         if len(recap_rows) > 1:
-            print("\n" + "=" * _LINE_WIDTH)
-            print("  BACKTEST RECAP (all runs)")
-            print("=" * _LINE_WIDTH)
-            print(f"  {'CSV stem':<36}  {'lstm_ret':>10}  {'accuracy':>10}  {'f1':>8}")
-            print("  " + "-" * 66)
-            for stem, ret, acc, f1 in recap_rows:
-                if ret != ret:
-                    print(f"  {stem:<36}  {'(n/a)':>10}  {'(n/a)':>10}  {'(n/a)':>8}")
+            # helpers --------------------------------------------------------
+            _BH = "─"
+            _BV = "│"
+
+            def _nanmax_idx(vals: list[float]) -> int | None:
+                best_i, best_v = None, float("-inf")
+                for i, v in enumerate(vals):
+                    if v == v and v > best_v:
+                        best_i, best_v = i, v
+                return best_i
+
+            def _row_best(vals: list[float]) -> int | None:
+                best_i, best_v = None, float("-inf")
+                for i, v in enumerate(vals):
+                    if v == v and v > best_v:
+                        best_i, best_v = i, v
+                return best_i
+
+            def _tbl_top(ws):
+                return "  ┌" + "┬".join(_BH * (w + 2) for w in ws) + "┐"
+
+            def _tbl_mid(ws):
+                return "  ├" + "┼".join(_BH * (w + 2) for w in ws) + "┤"
+
+            def _tbl_bot(ws):
+                return "  └" + "┴".join(_BH * (w + 2) for w in ws) + "┘"
+
+            def _tbl_row(cells, ws):
+                parts = [f" {str(v):<{w}} " for v, w in zip(cells, ws)]
+                return "  " + _BV + _BV.join(parts) + _BV
+
+            def _fv(v: float, width: int = 11, *, winner: bool = False) -> str:
+                """Format a float into exactly `width` chars, reducing precision if needed."""
+                inner = width - 2
+                if v != v:
+                    s = "(n/a)"
                 else:
-                    print(f"  {stem:<36}  {ret:>10.4f}  {acc:>10.4f}  {f1:>8.4f}")
+                    for dec in (4, 3, 2, 1, 0):
+                        s = f"{v:+.{dec}f}"
+                        if len(s) <= inner:
+                            break
+                    if len(s) > inner:
+                        s = f"{v:+.2e}"
+                    if len(s) > inner:
+                        s = s[:inner]
+                if winner:
+                    return f"[{s:>{inner}}]"
+                return f" {s:>{inner}} "
+
+            def _fv2(v: float, width: int = 9) -> str:
+                return f"{'(n/a)':>{width}}" if v != v else f"{v:>{width}.4f}"
+
+            any_reduced = any(r["window_reduced"] for r in recap_rows)
+            lstm_rets   = [r["model_lstm"]["total_return"] for r in recap_rows]
+            best_lstm_i = _nanmax_idx(lstm_rets)
+
+            # --- LSTM recap -------------------------------------------------
+            cw1 = [24, 10, 10, 10, 8, 2]
+            print("\n" + "=" * _LINE_WIDTH)
+            print("  BACKTEST RECAP  —  LSTM  ([*] = best total return)")
+            print("=" * _LINE_WIDTH)
+            print(_tbl_top(cw1))
+            print(_tbl_row(["CSV stem", "Tot.Return", "Sharpe", "Max DD", "F1", ""], cw1))
+            print(_tbl_mid(cw1))
+            for i, r in enumerate(recap_rows):
+                marker = "[*]" if i == best_lstm_i else "   "
+                tag    = " *" if r["window_reduced"] else "  "
+                ml = r["model_lstm"]
+                print(_tbl_row([
+                    f"{marker} {r['stem']}",
+                    _fv2(ml["total_return"]),
+                    _fv2(ml["sharpe"]),
+                    _fv2(ml["max_drawdown"]),
+                    _fv2(r["f1"], width=8),
+                    tag,
+                ], cw1))
+            print(_tbl_bot(cw1))
+            if best_lstm_i is not None:
+                print(f"  [*] best : {recap_rows[best_lstm_i]['stem']}  ({lstm_rets[best_lstm_i]:+.4f})")
+            if any_reduced:
+                print("   *  window was auto-reduced to fit available data (less reliable)")
             print("=" * _LINE_WIDTH + "\n")
+
+            cw2 = [24, 11, 11, 11, 11, 11]
+
+            def _strat_table(title: str, metric: str, note: str) -> None:
+                print("=" * _LINE_WIDTH)
+                print(f"  STRATEGY COMPARISON  —  {title}  ([*] = best in row)")
+                print("=" * _LINE_WIDTH)
+                print(_tbl_top(cw2))
+                print(_tbl_row(["CSV stem", *_STRAT_LABELS], cw2))
+                print(_tbl_mid(cw2))
+                for r in recap_rows:
+                    row_vals = [r[sk][metric] for sk in _STRAT_KEYS]
+                    winner_i = _row_best(row_vals)
+                    cells = [r["stem"]] + [_fv(v, winner=(i == winner_i)) for i, v in enumerate(row_vals)]
+                    print(_tbl_row(cells, cw2))
+                print(_tbl_bot(cw2))
+                print(f"  [*] = {note}")
+                print("=" * _LINE_WIDTH + "\n")
+
+            _strat_table("Total Return",  "total_return",  "highest total return for that row")
+            _strat_table("Sharpe Ratio",  "sharpe",        "highest Sharpe ratio for that row")
+            _strat_table("Max Drawdown",  "max_drawdown",  "least negative max drawdown for that row")
+            _strat_table("Win Rate",      "win_rate",      "highest win rate for that row")
     else:
         print("  Cancelled.")
 
@@ -336,7 +450,7 @@ def run_protocol_runner():
     if not protocol:
         return
     epochs = ask("epochs", "5")
-    window = ask("window", "30")
+    window = ask("window", "100")
     fee = ask("fee", "0.001")
     print(f"  Selected protocol: {rel(protocol)}")
     print(f"  Selected epochs: {epochs}")

@@ -148,7 +148,7 @@ ap.add_argument(
     "--dropout",
     type=float,
     default=0.4,
-    help="Dropout probability applied to the LSTM pooled vector before the FC layer (default: 0.4).",
+    help="Dropout probability applied to the LSTM pooled vector before the FC layer.",
 )
 ap.add_argument(
     "--weight_decay",
@@ -198,7 +198,7 @@ if len(sys.argv) == 1:
         mdl += ".pt"
     sys.argv += ["--save_model", mdl]
 
-    win = input("window length [30] ").strip() or "30"
+    win = input("window length [100] ").strip() or "100"
     epc = input("epochs [40] ").strip() or "40"
     att = input("Use attention? (y/n) [n] ").strip().lower().startswith("y")
     sys.argv += ["--window", win, "--epochs", epc]
@@ -334,52 +334,84 @@ def print_kv_section(title: str, rows: list[tuple[str, str]], border: str = "=")
     print(border * LINE_WIDTH)
 
 
-def print_eval_section(val_metrics, test_metrics, window: int):
+def print_eval_section(val_metrics, test_metrics, window: int, val_thr_info: str | None = None):
     print("\n" + "=" * LINE_WIDTH)
     print("FINAL EVALUATION")
     print("=" * LINE_WIDTH)
+    if val_thr_info:
+        print(f"  {val_thr_info}")
+        print("-" * LINE_WIDTH)
 
     if val_metrics is None and test_metrics is None:
-        print(f"[WARN] val/test rows are insufficient for window={window}")
+        print(f"  [WARN] val/test rows are insufficient for window={window}")
+        print("=" * LINE_WIDTH)
         return
 
-    print(f"  {'split':<6}{'n':>8}{'acc':>10}{'prec':>10}{'rec':>10}{'f1':>10}{'thr':>8}")
-    print("  " + "-" * (LINE_WIDTH - 2))
+    # ── Table 1: main metrics ──────────────────────────────────────────
+    _H = "─"
+    _V = "│"
+    c = [6, 7, 10, 10, 10, 10, 6]  # split n acc prec rec f1 thr
 
-    def _print_row(name: str, metrics):
-        print(
-            f"  {name:<6}"
-            f"{metrics['n_samples']:>8}"
-            f"{metrics['accuracy']:>10.4f}"
-            f"{metrics['precision']:>10.4f}"
-            f"{metrics['recall']:>10.4f}"
-            f"{metrics['f1']:>10.4f}"
-            f"{metrics['threshold']:>8.2f}"
-        )
+    def _top(widths):
+        return "  ┌" + "┬".join(_H * (w + 2) for w in widths) + "┐"
 
-    def _print_conf(name: str, metrics):
-        if metrics is None or "tn" not in metrics:
-            return
-        m = metrics
-        print(
-            f"  {name:<6}"
-            f"  TN={m['tn']} FP={m['fp']} FN={m['fn']} TP={m['tp']}  "
-            f"P(pred=1)={m['pred_positive_rate']:.4f}"
-        )
+    def _mid(widths):
+        return "  ├" + "┼".join(_H * (w + 2) for w in widths) + "┤"
+
+    def _bot(widths):
+        return "  └" + "┴".join(_H * (w + 2) for w in widths) + "┘"
+
+    def _row(cells, widths):
+        parts = [f" {str(v).center(w)} " for v, w in zip(cells, widths)]
+        return "  " + _V + _V.join(parts) + _V
+
+    headers1 = ["Split", "N", "Accuracy", "Precision", "Recall", "F1", "Thr"]
+    print(_top(c))
+    print(_row(headers1, c))
+    print(_mid(c))
+
+    def _metrics_row(name, m):
+        if m is None:
+            return _row([name, "N/A", "-", "-", "-", "-", "-"], c)
+        return _row([
+            name,
+            f"{m['n_samples']:,}",
+            f"{m['accuracy']:.4f}",
+            f"{m['precision']:.4f}",
+            f"{m['recall']:.4f}",
+            f"{m['f1']:.4f}",
+            f"{m['threshold']:.2f}",
+        ], c)
+
+    print(_metrics_row("VAL",  val_metrics))
+    print(_metrics_row("TEST", test_metrics))
+    print(_bot(c))
 
     if val_metrics is None:
-        print(f"  {'VAL':<6}{'N/A':>8}{'-':>10}{'-':>10}{'-':>10}{'-':>10}{'-':>8}")
         print(f"  [WARN] val rows are insufficient for window={window}")
-    else:
-        _print_row("VAL", val_metrics)
-        _print_conf("VAL", val_metrics)
-
     if test_metrics is None:
-        print(f"  {'TEST':<6}{'N/A':>8}{'-':>10}{'-':>10}{'-':>10}{'-':>10}{'-':>8}")
         print(f"  [WARN] test rows are insufficient for window={window}")
-    else:
-        _print_row("TEST", test_metrics)
-        _print_conf("TEST", test_metrics)
+
+    # ── Table 2: confusion matrix ──────────────────────────────────────
+    c2 = [6, 6, 6, 6, 6, 12]  # split TN FP FN TP P(pred=UP)
+    headers2 = ["Split", "TN", "FP", "FN", "TP", "P(pred=UP)"]
+    print()
+    print(_top(c2))
+    print(_row(headers2, c2))
+    print(_mid(c2))
+
+    def _conf_row(name, m):
+        if m is None or "tn" not in m:
+            return _row([name, "-", "-", "-", "-", "-"], c2)
+        return _row([
+            name,
+            m["tn"], m["fp"], m["fn"], m["tp"],
+            f"{m['pred_positive_rate']:.1%}",
+        ], c2)
+
+    print(_conf_row("VAL",  val_metrics))
+    print(_conf_row("TEST", test_metrics))
+    print(_bot(c2))
 
     print("=" * LINE_WIDTH)
 

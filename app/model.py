@@ -26,7 +26,7 @@ class LSTMDir(nn.Module):
         num_layers: int = 2,
         num_intervals: int | None = None,
         embed_dim: int = 8,
-        dropout: float = 0.3,
+        dropout: float = 0,
     ):
         super().__init__()
         self.att = att
