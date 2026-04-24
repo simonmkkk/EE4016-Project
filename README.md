@@ -1,13 +1,13 @@
 <div align="center">
 
-# 📈 Stock ML — LSTM-Based Stock Direction Prediction & Backtesting System
+# Stock ML — LSTM-Based Stock Direction Prediction & Backtesting System
 
 **EE4016 Applications of AI with Deep Learning — Course Project**
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch 2.10](https://img.shields.io/badge/PyTorch-2.10-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
 
-[📖 中文版 README](README_CN.md)
+[中文版 README](README_CN.md)
 
 *An end-to-end CLI system for downloading market data, training LSTM direction classifiers across multiple time granularities, backtesting against traditional technical strategies, and generating explainable predictions.*
 
@@ -44,13 +44,13 @@
 
 | Feature | Description |
 |---|---|
-| 🧠 **Multi-Granularity LSTM** | Stacked LSTM with residual connections and optional attention, supporting 13 yfinance intervals (1m → 3mo) with learned interval embeddings |
-| 📊 **Automated Backtesting** | Side-by-side comparison against Buy & Hold, MACD, RSI, and Bollinger Bands strategies with Sharpe, drawdown, and win-rate metrics |
-| 🔍 **Explainable Predictions** | Per-bar explanations citing RSI, MACD, and volume signals; high-confidence error analysis with improvement tips |
-| ⚙️ **Protocol-Driven Experiments** | JSON experiment protocol automates the full download → train → backtest pipeline across multiple tickers and time windows |
-| 🖥️ **Interactive CLI Menu** | Six sub-menus (Data / Train / Backtest / Predict / Pipeline / Results) with ticker filtering, file pickers, and recap tables |
-| 📈 **Adaptive Thresholding** | Validation-set grid search for optimal decision threshold with probability drift adjustment |
-| 🔄 **Walk-Forward Evaluation** | Optional rolling-fold evaluation on the test split for robustness checking |
+| **Multi-Granularity LSTM** | Stacked LSTM with residual connections and optional attention, supporting 13 yfinance intervals (1m → 3mo) with learned interval embeddings |
+| **Automated Backtesting** | Side-by-side comparison against Buy & Hold, MACD, RSI, and Bollinger Bands strategies with Sharpe, drawdown, and win-rate metrics |
+| **Explainable Predictions** | Per-bar explanations citing RSI, MACD, and volume signals; high-confidence error analysis with improvement tips |
+| **Protocol-Driven Experiments** | JSON experiment protocol automates the full download → train → backtest pipeline across multiple tickers and time windows |
+| **Interactive CLI Menu** | Six sub-menus (Data / Train / Backtest / Predict / Pipeline / Results) with ticker filtering, file pickers, and recap tables |
+| **Adaptive Thresholding** | Validation-set grid search for optimal decision threshold with probability drift adjustment |
+| **Walk-Forward Evaluation** | Optional rolling-fold evaluation on the test split for robustness checking |
 
 ---
 
