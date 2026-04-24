@@ -92,7 +92,35 @@ def pick_csvs(
 ) -> list[Path] | None:
     state = load_state()
     csvs = list_historical_csvs()
-    items = [rel(p) for p in csvs]
+    if not csvs:
+        return None
+
+    # If multiple tickers exist, let the user filter by ticker first.
+    ticker_to_csvs: dict[str, list[Path]] = {}
+    for p in csvs:
+        tic = infer_ticker_from_csv(p) or "UNKNOWN"
+        ticker_to_csvs.setdefault(tic, []).append(p)
+
+    selected_csvs = csvs
+    if len(ticker_to_csvs) > 1:
+        sorted_tickers = sorted(ticker_to_csvs.keys())
+        filter_items = [f"ALL ({len(csvs)} files)"] + [
+            f"{tic} ({len(ticker_to_csvs[tic])} files)" for tic in sorted_tickers
+        ]
+        chosen_filter = choose_from_list(
+            "  Select ticker filter",
+            filter_items,
+            header=header,
+        )
+        if not chosen_filter:
+            return None
+        if not chosen_filter.startswith("ALL "):
+            chosen_ticker = chosen_filter.split(" ", 1)[0]
+            selected_csvs = ticker_to_csvs.get(chosen_ticker, [])
+            if not selected_csvs:
+                return None
+
+    items = [rel(p) for p in selected_csvs]
     title = list_title or f"  Select one or more CSVs ({rel(SAVE_DIR)}/*.csv)"
     chosen_items = choose_multiple_from_list(
         title,
