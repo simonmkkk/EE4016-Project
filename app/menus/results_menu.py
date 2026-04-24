@@ -1,6 +1,7 @@
 from ..paths import RESULTS_DIR
 from ..services.discovery import rel
 from ..ui import clear_screen, pause
+from ..workflows.merge_all_results import main as merge_results_main
 
 
 def _print_results_menu():
@@ -10,6 +11,7 @@ def _print_results_menu():
     print("\nPlease select an option:\n")
     print("[Summary]")
     print(f"   1. Show protocol comparison summary ({rel(RESULTS_DIR)}/comparison_summary.csv)")
+    print(f"   2. Merge all train/backtest/predict results ({rel(RESULTS_DIR)}/all_results_merged.csv)")
     print("\n   0. Back")
     print("=" * 70)
 
@@ -56,6 +58,8 @@ def run_results_menu():
         if choice == "1":
             _show_comparison_summary()
             pause()
+        elif choice == "2":
+            merge_results_main([])
+            pause()
         else:
             print("\nInvalid choice, please try again")
-

@@ -8,6 +8,11 @@ from pathlib import Path
 from ..paths import PROJECT_ROOT, RESULTS_DIR, SAVE_DIR
 from ..services import infer_ticker_from_csv, pick_csvs, pick_model, pick_protocol, rel
 from ..ui import ask, ask_yes_no
+from ..workflows.backtest_stock import main as backtest_main
+from ..workflows.get_stock_data import main as download_main
+from ..workflows.predict_stock import main as predict_main
+from ..workflows.run_protocol import main as protocol_main
+from ..workflows.train_stock import main as train_main
 
 
 _LINE_WIDTH = 70
@@ -63,10 +68,27 @@ def _print_list(title: str, items: list[str]) -> None:
 def run_script(script: str, extra_args: list[str] | None = None):
     extra_args = extra_args or []
     cmd = [sys.executable, script, *extra_args]
+    runner = {
+        "get_stock_data.py": download_main,
+        "train_stock.py": train_main,
+        "backtest_stock.py": backtest_main,
+        "predict_stock.py": predict_main,
+        "run_protocol.py": protocol_main,
+    }.get(script)
+    if runner is None:
+        raise ValueError(f"Unsupported script dispatch: {script}")
     print("\n" + "=" * _LINE_WIDTH)
     print(f"  RUN  : {script}")
     print("=" * _LINE_WIDTH)
-    subprocess.run(cmd, cwd=str(PROJECT_ROOT), check=True)
+    try:
+        result = runner(extra_args)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+        if code != 0:
+            raise subprocess.CalledProcessError(code, cmd) from exc
+    else:
+        if isinstance(result, int) and result != 0:
+            raise subprocess.CalledProcessError(result, cmd)
     print("=" * _LINE_WIDTH)
     print(f"  DONE : {script}")
     print("=" * _LINE_WIDTH + "\n")
